@@ -1,5 +1,3 @@
-using Xunit;
-
 namespace Colly.Tests;
 
 public class CollyTests
@@ -200,8 +198,8 @@ public class CollyTests
         // Arrange
         var items = new List<SimpleItem>
         {
-            new SimpleItem { Id = 1, Name = "Item 1", Value = 10.5 },
-            new SimpleItem { Id = 2, Name = "Item 2", Value = 20.5 }
+            new() { Id = 1, Name = "Item 1", Value = 10.5 },
+            new() { Id = 2, Name = "Item 2", Value = 20.5 }
         };
 
         // Act

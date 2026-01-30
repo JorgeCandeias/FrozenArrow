@@ -1,7 +1,7 @@
-using System.Reflection;
 using Apache.Arrow;
 using Apache.Arrow.Memory;
 using Apache.Arrow.Types;
+using System.Reflection;
 
 namespace Colly;
 
@@ -23,10 +23,7 @@ public static class EnumerableExtensions
     /// </remarks>
     public static Colly<T> ToColly<T>(this IEnumerable<T> source) where T : new()
     {
-        if (source == null)
-        {
-            throw new ArgumentNullException(nameof(source));
-        }
+        ArgumentNullException.ThrowIfNull(source);
 
         // Get all public instance properties
         var properties = typeof(T)
@@ -154,9 +151,13 @@ public static class EnumerableExtensions
         {
             var value = property.GetValue(item);
             if (value == null)
+            {
                 builder.AppendNull();
+            }
             else
+            {
                 builder.Append((int)value);
+            }
         }
         return builder.Build(allocator);
     }
@@ -319,7 +320,7 @@ public static class EnumerableExtensions
     {
         var builder = new TimestampArray.Builder(new TimestampType(TimeUnit.Millisecond, TimeZoneInfo.Utc))
             .Reserve(items.Count);
-        
+
         foreach (var item in items)
         {
             var value = property.GetValue(item);

@@ -1,8 +1,7 @@
+using Apache.Arrow;
+using Apache.Arrow.Types;
 using System.Collections;
 using System.Reflection;
-using Apache.Arrow;
-using Apache.Arrow.Memory;
-using Apache.Arrow.Types;
 
 namespace Colly;
 
@@ -56,25 +55,15 @@ public sealed class Colly<T> : IEnumerable<T>, IDisposable where T : new()
         }
     }
 
-    private sealed class CollyEnumerator : IEnumerator<T>
+    private sealed class CollyEnumerator(RecordBatch recordBatch, PropertyInfo[] properties, int count) : IEnumerator<T>
     {
-        private readonly RecordBatch _recordBatch;
-        private readonly PropertyInfo[] _properties;
-        private readonly int _count;
         private int _position = -1;
-
-        public CollyEnumerator(RecordBatch recordBatch, PropertyInfo[] properties, int count)
-        {
-            _recordBatch = recordBatch;
-            _properties = properties;
-            _count = count;
-        }
 
         public T Current
         {
             get
             {
-                if (_position < 0 || _position >= _count)
+                if (_position < 0 || _position >= count)
                 {
                     throw new InvalidOperationException("Enumerator is not positioned on a valid element.");
                 }
@@ -87,7 +76,7 @@ public sealed class Colly<T> : IEnumerable<T>, IDisposable where T : new()
 
         public bool MoveNext()
         {
-            if (_position < _count - 1)
+            if (_position < count - 1)
             {
                 _position++;
                 return true;
@@ -109,12 +98,12 @@ public sealed class Colly<T> : IEnumerable<T>, IDisposable where T : new()
         {
             var item = new T();
 
-            for (int i = 0; i < _properties.Length; i++)
+            for (int i = 0; i < properties.Length; i++)
             {
-                var property = _properties[i];
-                var array = _recordBatch.Column(i);
+                var property = properties[i];
+                var array = recordBatch.Column(i);
                 var value = ExtractValue(array, index, property.PropertyType);
-                
+
                 if (value != null || !property.PropertyType.IsValueType || Nullable.GetUnderlyingType(property.PropertyType) != null)
                 {
                     property.SetValue(item, value);
@@ -154,8 +143,8 @@ public sealed class Colly<T> : IEnumerable<T>, IDisposable where T : new()
                 DoubleArray doubleArray => doubleArray.GetValue(index),
                 BooleanArray boolArray => boolArray.GetValue(index),
                 StringArray stringArray => stringArray.GetString(index),
-                Date32Array date32Array => date32Array.GetValue(index).HasValue 
-                    ? DateTimeOffset.FromUnixTimeSeconds(date32Array.GetValue(index)!.Value * 86400L).DateTime 
+                Date32Array date32Array => date32Array.GetValue(index).HasValue
+                    ? DateTimeOffset.FromUnixTimeSeconds(date32Array.GetValue(index)!.Value * 86400L).DateTime
                     : (DateTime?)null,
                 Date64Array date64Array => date64Array.GetValue(index).HasValue
                     ? DateTimeOffset.FromUnixTimeMilliseconds(date64Array.GetValue(index)!.Value).DateTime
