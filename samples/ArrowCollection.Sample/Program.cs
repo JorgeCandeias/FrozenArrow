@@ -133,6 +133,51 @@ using (var readonlyCollection = immutableReadings.ToArrowCollection())
     }
 }
 
+Console.WriteLine();
+
+// Example 6: Half-precision floats and Binary data
+Console.WriteLine("Example 6: Half-Precision Floats and Binary Data");
+Console.WriteLine("-------------------------------------------------");
+
+var scientificData = new[]
+{
+    new ScientificMeasurement 
+    { 
+        Id = 1, 
+        LowPrecisionValue = (Half)3.14f, 
+        RawData = [0x01, 0x02, 0x03, 0x04],
+        OptionalMeasurement = (Half)2.71f,
+        OptionalPayload = [0xFF, 0xFE]
+    },
+    new ScientificMeasurement 
+    { 
+        Id = 2, 
+        LowPrecisionValue = (Half)1.618f, 
+        RawData = [0xDE, 0xAD, 0xBE, 0xEF],
+        OptionalMeasurement = null,
+        OptionalPayload = null
+    },
+    new ScientificMeasurement 
+    { 
+        Id = 3, 
+        LowPrecisionValue = (Half)0.577f, 
+        RawData = [0xCA, 0xFE],
+        OptionalMeasurement = (Half)1.414f,
+        OptionalPayload = [0xBA, 0xBE]
+    }
+};
+
+using (var sciCollection = scientificData.ToArrowCollection())
+{
+    Console.WriteLine($"Created scientific data collection with {sciCollection.Count} items");
+    foreach (var item in sciCollection)
+    {
+        var optionalVal = item.OptionalMeasurement.HasValue ? item.OptionalMeasurement.Value.ToString() : "null";
+        var optionalData = item.OptionalPayload != null ? BitConverter.ToString(item.OptionalPayload) : "null";
+        Console.WriteLine($"  ID {item.Id}: Half={item.LowPrecisionValue}, Binary={BitConverter.ToString(item.RawData)}, OptHalf={optionalVal}, OptBinary={optionalData}");
+    }
+}
+
 Console.WriteLine("\n================================");
 Console.WriteLine("Demo completed!");
 
@@ -176,6 +221,22 @@ public readonly struct ImmutableReading
     public double Value { get; init; }
     [ArrowArray]
     public DateTime Timestamp { get; init; }
+}
+
+// Define a type with Half (half-precision float) and Binary data
+[ArrowRecord]
+public class ScientificMeasurement
+{
+    [ArrowArray]
+    public int Id { get; set; }
+    [ArrowArray]
+    public Half LowPrecisionValue { get; set; }
+    [ArrowArray]
+    public byte[] RawData { get; set; } = [];
+    [ArrowArray]
+    public Half? OptionalMeasurement { get; set; }
+    [ArrowArray]
+    public byte[]? OptionalPayload { get; set; }
 }
 
 

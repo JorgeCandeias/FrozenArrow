@@ -196,8 +196,8 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
             return namedType.TypeArguments[0].ToDisplayString();
         }
 
-        // Handle nullable reference types
-        if (type.NullableAnnotation == NullableAnnotation.Annotated && type.OriginalDefinition is INamedTypeSymbol)
+        // Handle nullable reference types (including arrays)
+        if (type.NullableAnnotation == NullableAnnotation.Annotated)
         {
             return type.WithNullableAnnotation(NullableAnnotation.NotAnnotated).ToDisplayString();
         }
@@ -455,8 +455,10 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
             "byte" => $"{varName}.GetValue(index)!.Value",
             "float" => $"{varName}.GetValue(index)!.Value",
             "double" => $"{varName}.GetValue(index)!.Value",
+            "System.Half" => $"{varName}.GetValue(index)!.Value",
             "bool" => $"{varName}.GetValue(index)!.Value",
             "string" => $"{varName}.GetString(index)!",
+            "byte[]" => $"{varName}.GetBytes(index).ToArray()",
             "System.DateTime" => $"global::System.DateTimeOffset.FromUnixTimeMilliseconds({varName}.GetValue(index)!.Value).DateTime",
             _ => throw new NotSupportedException($"Type {underlyingType} is not supported.")
         };
@@ -490,9 +492,14 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
             {
                 sb.AppendLine($"{indent}        {builderVarName}.Append(new global::System.DateTimeOffset(value{index}.Value, global::System.TimeSpan.Zero));");
             }
-            else if (field.UnderlyingTypeName == "string")
+            else if (field.UnderlyingTypeName == "System.Half")
             {
-                // String is a reference type, doesn't need .Value
+                // Half value - use .Value to unwrap from nullable
+                sb.AppendLine($"{indent}        {builderVarName}.Append(value{index}.Value);");
+            }
+            else if (field.UnderlyingTypeName == "string" || field.UnderlyingTypeName == "byte[]")
+            {
+                // Reference types don't need .Value
                 sb.AppendLine($"{indent}        {builderVarName}.Append(value{index});");
             }
             else
@@ -506,9 +513,9 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
             {
                 sb.AppendLine($"{indent}    {builderVarName}.Append(new global::System.DateTimeOffset(_getter{index}(item), global::System.TimeSpan.Zero));");
             }
-            else if (field.UnderlyingTypeName == "string")
+            else if (field.UnderlyingTypeName == "string" || field.UnderlyingTypeName == "byte[]")
             {
-                // String is a reference type, handle null as empty or null
+                // Reference types, handle null
                 sb.AppendLine($"{indent}    var value{index} = _getter{index}(item);");
                 sb.AppendLine($"{indent}    if (value{index} == null)");
                 sb.AppendLine($"{indent}        {builderVarName}.AppendNull();");
@@ -539,8 +546,10 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
             "byte" => "UInt8Type.Default",
             "float" => "FloatType.Default",
             "double" => "DoubleType.Default",
+            "System.Half" => "HalfFloatType.Default",
             "bool" => "BooleanType.Default",
             "string" => "StringType.Default",
+            "byte[]" => "BinaryType.Default",
             "System.DateTime" => "new TimestampType(TimeUnit.Millisecond, global::System.TimeZoneInfo.Utc)",
             _ => throw new NotSupportedException($"Type {underlyingType} is not supported.")
         };
@@ -560,8 +569,10 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
             "byte" => "UInt8Array",
             "float" => "FloatArray",
             "double" => "DoubleArray",
+            "System.Half" => "HalfFloatArray",
             "bool" => "BooleanArray",
             "string" => "StringArray",
+            "byte[]" => "BinaryArray",
             "System.DateTime" => "TimestampArray",
             _ => throw new NotSupportedException($"Type {underlyingType} is not supported.")
         };
@@ -581,8 +592,10 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
             "byte" => "UInt8Array.Builder",
             "float" => "FloatArray.Builder",
             "double" => "DoubleArray.Builder",
+            "System.Half" => "HalfFloatArray.Builder",
             "bool" => "BooleanArray.Builder",
             "string" => "StringArray.Builder",
+            "byte[]" => "BinaryArray.Builder",
             "System.DateTime" => "TimestampArray.Builder",
             _ => throw new NotSupportedException($"Type {underlyingType} is not supported.")
         };

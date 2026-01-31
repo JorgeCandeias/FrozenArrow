@@ -92,11 +92,12 @@ ArrowCollection supports the following property/field types:
 
 - **Signed Integers**: `int`, `long`, `short`, `sbyte`
 - **Unsigned Integers**: `uint`, `ulong`, `ushort`, `byte`
-- **Floating Point**: `float`, `double`
+- **Floating Point**: `float`, `double`, `Half`
 - **Boolean**: `bool`
 - **String**: `string`
+- **Binary**: `byte[]` (variable-length binary data)
 - **DateTime**: `DateTime` (stored as UTC timestamps in milliseconds)
-- **Nullable versions**: All of the above types can be nullable (`int?`, `string?`, `DateTime?`, etc.)
+- **Nullable versions**: All of the above types can be nullable (`int?`, `string?`, `DateTime?`, `Half?`, `byte[]?`, etc.)
 
 ### Working with Nullable Properties
 
@@ -119,6 +120,53 @@ var data = new[]
 };
 
 using var collection = data.ToArrowCollection();
+```
+
+### Working with Half-Precision Floats and Binary Data
+
+ArrowCollection supports `Half` (half-precision floating point) and `byte[]` (variable-length binary data):
+
+```csharp
+[ArrowRecord]
+public class ScientificData
+{
+    [ArrowArray]
+    public int Id { get; set; }
+    
+    [ArrowArray]
+    public Half LowPrecisionValue { get; set; }  // 16-bit float for memory efficiency
+    
+    [ArrowArray]
+    public byte[] RawData { get; set; } = [];    // Variable-length binary data
+    
+    [ArrowArray]
+    public Half? OptionalMeasurement { get; set; }
+    
+    [ArrowArray]
+    public byte[]? OptionalPayload { get; set; }
+}
+
+var readings = new[]
+{
+    new ScientificData 
+    { 
+        Id = 1, 
+        LowPrecisionValue = (Half)3.14f, 
+        RawData = new byte[] { 0x01, 0x02, 0x03 },
+        OptionalMeasurement = (Half)2.71f,
+        OptionalPayload = new byte[] { 0xFF }
+    },
+    new ScientificData 
+    { 
+        Id = 2, 
+        LowPrecisionValue = (Half)1.5f, 
+        RawData = new byte[] { 0xDE, 0xAD, 0xBE, 0xEF },
+        OptionalMeasurement = null,
+        OptionalPayload = null
+    }
+};
+
+using var collection = readings.ToArrowCollection();
 ```
 
 ### Using Fields Instead of Properties

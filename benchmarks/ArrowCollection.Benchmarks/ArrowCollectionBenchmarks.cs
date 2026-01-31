@@ -65,6 +65,8 @@ public class ArrowCollectionBenchmarks
                 Category2 = category2[i % category2.Length],
                 Category3 = category3[i % category3.Length],
                 Value = i * 1.5,
+                HalfValue = (Half)(i * 0.5f),
+                BinaryData = [(byte)(i % 256), (byte)((i >> 8) % 256), (byte)((i >> 16) % 256)],
                 IsActive = i % 2 == 0,
                 CreatedAt = baseDate.AddSeconds(-i)
             });
@@ -252,6 +254,8 @@ public class StructVsClassBenchmarks
             Category2 = categories[(i + 33) % categories.Length],
             Category3 = categories[(i + 67) % categories.Length],
             Value = i * 1.5,
+            HalfValue = (Half)(i * 0.5f),
+            BinaryData = [(byte)(i % 256), (byte)((i >> 8) % 256)],
             IsActive = i % 2 == 0,
             CreatedAt = baseDate.AddSeconds(-i)
         })];
@@ -263,6 +267,8 @@ public class StructVsClassBenchmarks
             Category2 = categories[(i + 33) % categories.Length],
             Category3 = categories[(i + 67) % categories.Length],
             Value = i * 1.5,
+            HalfValue = (Half)(i * 0.5f),
+            BinaryData = [(byte)(i % 256), (byte)((i >> 8) % 256)],
             IsActive = i % 2 == 0,
             CreatedAt = baseDate.AddSeconds(-i)
         })];
@@ -274,6 +280,8 @@ public class StructVsClassBenchmarks
             Category2 = categories[(i + 33) % categories.Length],
             Category3 = categories[(i + 67) % categories.Length],
             Value = i * 1.5,
+            HalfValue = (Half)(i * 0.5f),
+            BinaryData = [(byte)(i % 256), (byte)((i >> 8) % 256)],
             IsActive = i % 2 == 0,
             CreatedAt = baseDate.AddSeconds(-i)
         })];
@@ -423,6 +431,10 @@ public class BenchmarkItem
     [ArrowArray]
     public double Value { get; set; }
     [ArrowArray]
+    public Half HalfValue { get; set; }
+    [ArrowArray]
+    public byte[] BinaryData { get; set; } = [];
+    [ArrowArray]
     public bool IsActive { get; set; }
     [ArrowArray]
     public DateTime CreatedAt { get; set; }
@@ -442,6 +454,10 @@ public struct BenchmarkStruct
     [ArrowArray]
     public double Value { get; set; }
     [ArrowArray]
+    public Half HalfValue { get; set; }
+    [ArrowArray]
+    public byte[] BinaryData { get; set; }
+    [ArrowArray]
     public bool IsActive { get; set; }
     [ArrowArray]
     public DateTime CreatedAt { get; set; }
@@ -460,6 +476,10 @@ public readonly struct BenchmarkReadonlyStruct
     public string Category3 { get; init; }
     [ArrowArray]
     public double Value { get; init; }
+    [ArrowArray]
+    public Half HalfValue { get; init; }
+    [ArrowArray]
+    public byte[] BinaryData { get; init; }
     [ArrowArray]
     public bool IsActive { get; init; }
     [ArrowArray]

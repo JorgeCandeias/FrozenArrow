@@ -29,9 +29,13 @@ public class ArrowCollectionTests
         [ArrowArray]
         public double DoubleValue { get; set; }
         [ArrowArray]
+        public Half HalfValue { get; set; }
+        [ArrowArray]
         public bool BoolValue { get; set; }
         [ArrowArray]
         public string? StringValue { get; set; }
+        [ArrowArray]
+        public byte[] BinaryValue { get; set; } = [];
         [ArrowArray]
         public DateTime DateTimeValue { get; set; }
     }
@@ -45,6 +49,10 @@ public class ArrowCollectionTests
         public string? NullableString { get; set; }
         [ArrowArray]
         public DateTime? NullableDateTime { get; set; }
+        [ArrowArray]
+        public Half? NullableHalf { get; set; }
+        [ArrowArray]
+        public byte[]? NullableBinary { get; set; }
     }
 
     [Fact]
@@ -94,8 +102,10 @@ public class ArrowCollectionTests
                 ByteValue = 5,
                 FloatValue = 1.5f,
                 DoubleValue = 2.5,
+                HalfValue = (Half)1.25f,
                 BoolValue = true,
                 StringValue = "Test",
+                BinaryValue = [1, 2, 3, 4, 5],
                 DateTimeValue = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc)
             },
             new ComplexItem
@@ -106,8 +116,10 @@ public class ArrowCollectionTests
                 ByteValue = 10,
                 FloatValue = 3.5f,
                 DoubleValue = 4.5,
+                HalfValue = (Half)2.75f,
                 BoolValue = false,
                 StringValue = "Test2",
+                BinaryValue = [10, 20, 30],
                 DateTimeValue = new DateTime(2024, 6, 20, 15, 45, 0, DateTimeKind.Utc)
             }
         };
@@ -126,9 +138,15 @@ public class ArrowCollectionTests
         Assert.Equal((byte)5, first.ByteValue);
         Assert.Equal(1.5f, first.FloatValue, precision: 5);
         Assert.Equal(2.5, first.DoubleValue, precision: 5);
+        Assert.Equal((Half)1.25f, first.HalfValue);
         Assert.True(first.BoolValue);
         Assert.Equal("Test", first.StringValue);
+        Assert.Equal(new byte[] { 1, 2, 3, 4, 5 }, first.BinaryValue);
         Assert.Equal(new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc), first.DateTimeValue);
+
+        var second = result[1];
+        Assert.Equal((Half)2.75f, second.HalfValue);
+        Assert.Equal(new byte[] { 10, 20, 30 }, second.BinaryValue);
     }
 
     [Fact]
@@ -137,9 +155,9 @@ public class ArrowCollectionTests
         // Arrange
         var items = new[]
         {
-            new NullableItem { NullableInt = 42, NullableString = "Test", NullableDateTime = DateTime.UtcNow },
-            new NullableItem { NullableInt = null, NullableString = null, NullableDateTime = null },
-            new NullableItem { NullableInt = 100, NullableString = "Another", NullableDateTime = new DateTime(2024, 1, 1) }
+            new NullableItem { NullableInt = 42, NullableString = "Test", NullableDateTime = DateTime.UtcNow, NullableHalf = (Half)1.5f, NullableBinary = [1, 2, 3] },
+            new NullableItem { NullableInt = null, NullableString = null, NullableDateTime = null, NullableHalf = null, NullableBinary = null },
+            new NullableItem { NullableInt = 100, NullableString = "Another", NullableDateTime = new DateTime(2024, 1, 1), NullableHalf = (Half)2.5f, NullableBinary = [4, 5] }
         };
 
         // Act
@@ -152,14 +170,20 @@ public class ArrowCollectionTests
         Assert.Equal(42, result[0].NullableInt);
         Assert.Equal("Test", result[0].NullableString);
         Assert.NotNull(result[0].NullableDateTime);
+        Assert.Equal((Half)1.5f, result[0].NullableHalf);
+        Assert.Equal(new byte[] { 1, 2, 3 }, result[0].NullableBinary);
 
         Assert.Null(result[1].NullableInt);
         Assert.Null(result[1].NullableString);
         Assert.Null(result[1].NullableDateTime);
+        Assert.Null(result[1].NullableHalf);
+        Assert.Null(result[1].NullableBinary);
 
         Assert.Equal(100, result[2].NullableInt);
         Assert.Equal("Another", result[2].NullableString);
         Assert.NotNull(result[2].NullableDateTime);
+        Assert.Equal((Half)2.5f, result[2].NullableHalf);
+        Assert.Equal(new byte[] { 4, 5 }, result[2].NullableBinary);
     }
 
     [Fact]
@@ -357,9 +381,13 @@ public class ArrowCollectionStructTests
         [ArrowArray]
         public double DoubleValue { get; set; }
         [ArrowArray]
+        public Half HalfValue { get; set; }
+        [ArrowArray]
         public bool BoolValue { get; set; }
         [ArrowArray]
         public string? StringValue { get; set; }
+        [ArrowArray]
+        public byte[] BinaryValue { get; set; }
         [ArrowArray]
         public DateTime DateTimeValue { get; set; }
     }
@@ -376,6 +404,10 @@ public class ArrowCollectionStructTests
         public string? NullableString { get; set; }
         [ArrowArray]
         public DateTime? NullableDateTime { get; set; }
+        [ArrowArray]
+        public Half? NullableHalf { get; set; }
+        [ArrowArray]
+        public byte[]? NullableBinary { get; set; }
     }
 
     /// <summary>
@@ -390,6 +422,10 @@ public class ArrowCollectionStructTests
         public string? NullableString { get; init; }
         [ArrowArray]
         public DateTime? NullableDateTime { get; init; }
+        [ArrowArray]
+        public Half? NullableHalf { get; init; }
+        [ArrowArray]
+        public byte[]? NullableBinary { get; init; }
     }
 
     /// <summary>
@@ -494,8 +530,10 @@ public class ArrowCollectionStructTests
                 ByteValue = 5,
                 FloatValue = 1.5f,
                 DoubleValue = 2.5,
+                HalfValue = (Half)1.25f,
                 BoolValue = true,
                 StringValue = "Test",
+                BinaryValue = [1, 2, 3, 4, 5],
                 DateTimeValue = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc)
             },
             new ComplexStruct
@@ -506,8 +544,10 @@ public class ArrowCollectionStructTests
                 ByteValue = 10,
                 FloatValue = 3.5f,
                 DoubleValue = 4.5,
+                HalfValue = (Half)2.75f,
                 BoolValue = false,
                 StringValue = "Test2",
+                BinaryValue = [10, 20, 30],
                 DateTimeValue = new DateTime(2024, 6, 20, 15, 45, 0, DateTimeKind.Utc)
             }
         };
@@ -526,9 +566,15 @@ public class ArrowCollectionStructTests
         Assert.Equal((byte)5, first.ByteValue);
         Assert.Equal(1.5f, first.FloatValue, precision: 5);
         Assert.Equal(2.5, first.DoubleValue, precision: 5);
+        Assert.Equal((Half)1.25f, first.HalfValue);
         Assert.True(first.BoolValue);
         Assert.Equal("Test", first.StringValue);
+        Assert.Equal(new byte[] { 1, 2, 3, 4, 5 }, first.BinaryValue);
         Assert.Equal(new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc), first.DateTimeValue);
+
+        var second = result[1];
+        Assert.Equal((Half)2.75f, second.HalfValue);
+        Assert.Equal(new byte[] { 10, 20, 30 }, second.BinaryValue);
     }
 
     #endregion
@@ -541,9 +587,9 @@ public class ArrowCollectionStructTests
         // Arrange
         var items = new[]
         {
-            new NullableStruct { NullableInt = 42, NullableString = "Test", NullableDateTime = DateTime.UtcNow },
-            new NullableStruct { NullableInt = null, NullableString = null, NullableDateTime = null },
-            new NullableStruct { NullableInt = 100, NullableString = "Another", NullableDateTime = new DateTime(2024, 1, 1) }
+            new NullableStruct { NullableInt = 42, NullableString = "Test", NullableDateTime = DateTime.UtcNow, NullableHalf = (Half)1.5f, NullableBinary = [1, 2, 3] },
+            new NullableStruct { NullableInt = null, NullableString = null, NullableDateTime = null, NullableHalf = null, NullableBinary = null },
+            new NullableStruct { NullableInt = 100, NullableString = "Another", NullableDateTime = new DateTime(2024, 1, 1), NullableHalf = (Half)2.5f, NullableBinary = [4, 5] }
         };
 
         // Act
@@ -556,14 +602,20 @@ public class ArrowCollectionStructTests
         Assert.Equal(42, result[0].NullableInt);
         Assert.Equal("Test", result[0].NullableString);
         Assert.NotNull(result[0].NullableDateTime);
+        Assert.Equal((Half)1.5f, result[0].NullableHalf);
+        Assert.Equal(new byte[] { 1, 2, 3 }, result[0].NullableBinary);
 
         Assert.Null(result[1].NullableInt);
         Assert.Null(result[1].NullableString);
         Assert.Null(result[1].NullableDateTime);
+        Assert.Null(result[1].NullableHalf);
+        Assert.Null(result[1].NullableBinary);
 
         Assert.Equal(100, result[2].NullableInt);
         Assert.Equal("Another", result[2].NullableString);
         Assert.NotNull(result[2].NullableDateTime);
+        Assert.Equal((Half)2.5f, result[2].NullableHalf);
+        Assert.Equal(new byte[] { 4, 5 }, result[2].NullableBinary);
     }
 
     [Fact]
@@ -572,9 +624,9 @@ public class ArrowCollectionStructTests
         // Arrange
         var items = new[]
         {
-            new ReadonlyNullableStruct { NullableInt = 42, NullableString = "Test", NullableDateTime = DateTime.UtcNow },
-            new ReadonlyNullableStruct { NullableInt = null, NullableString = null, NullableDateTime = null },
-            new ReadonlyNullableStruct { NullableInt = 100, NullableString = "Another", NullableDateTime = new DateTime(2024, 1, 1) }
+            new ReadonlyNullableStruct { NullableInt = 42, NullableString = "Test", NullableDateTime = DateTime.UtcNow, NullableHalf = (Half)1.5f, NullableBinary = [1, 2, 3] },
+            new ReadonlyNullableStruct { NullableInt = null, NullableString = null, NullableDateTime = null, NullableHalf = null, NullableBinary = null },
+            new ReadonlyNullableStruct { NullableInt = 100, NullableString = "Another", NullableDateTime = new DateTime(2024, 1, 1), NullableHalf = (Half)2.5f, NullableBinary = [4, 5] }
         };
 
         // Act
@@ -587,14 +639,20 @@ public class ArrowCollectionStructTests
         Assert.Equal(42, result[0].NullableInt);
         Assert.Equal("Test", result[0].NullableString);
         Assert.NotNull(result[0].NullableDateTime);
+        Assert.Equal((Half)1.5f, result[0].NullableHalf);
+        Assert.Equal(new byte[] { 1, 2, 3 }, result[0].NullableBinary);
 
         Assert.Null(result[1].NullableInt);
         Assert.Null(result[1].NullableString);
         Assert.Null(result[1].NullableDateTime);
+        Assert.Null(result[1].NullableHalf);
+        Assert.Null(result[1].NullableBinary);
 
         Assert.Equal(100, result[2].NullableInt);
         Assert.Equal("Another", result[2].NullableString);
         Assert.NotNull(result[2].NullableDateTime);
+        Assert.Equal((Half)2.5f, result[2].NullableHalf);
+        Assert.Equal(new byte[] { 4, 5 }, result[2].NullableBinary);
     }
 
     #endregion
