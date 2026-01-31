@@ -2,13 +2,6 @@ using BenchmarkDotNet.Running;
 using ArrowCollection.Benchmarks;
 
 // Check for command-line arguments
-if (args.Length > 0 && args[0] == "--memory-footprint")
-{
-    // Run the memory footprint analyzer (separate from BenchmarkDotNet)
-    MemoryFootprintAnalyzer.Run();
-    return;
-}
-
 if (args.Length > 0 && args[0] == "--struct-comparison")
 {
     // Run struct vs class comparison benchmarks
@@ -16,11 +9,19 @@ if (args.Length > 0 && args[0] == "--struct-comparison")
     return;
 }
 
-if (args.Length > 0 && args[0] == "--all-benchmarks")
+if (args.Length > 0 && args[0] == "--heavy")
+{
+    // Run extreme scenario benchmarks with 200-property record and 1M items
+    BenchmarkRunner.Run<HeavyRecordBenchmarks>();
+    return;
+}
+
+if (args.Length > 0 && args[0] == "--all")
 {
     // Run all BenchmarkDotNet benchmarks
     BenchmarkRunner.Run<ArrowCollectionBenchmarks>();
     BenchmarkRunner.Run<StructVsClassBenchmarks>();
+    BenchmarkRunner.Run<HeavyRecordBenchmarks>();
     return;
 }
 
@@ -29,10 +30,12 @@ Console.WriteLine("ArrowCollection Benchmark Runner");
 Console.WriteLine("================================");
 Console.WriteLine();
 Console.WriteLine("Available options:");
-Console.WriteLine("  --memory-footprint   : Run long-term memory footprint analysis");
 Console.WriteLine("  --struct-comparison  : Run struct vs class comparison benchmarks");
-Console.WriteLine("  --all-benchmarks     : Run all BenchmarkDotNet benchmarks");
+Console.WriteLine("  --heavy              : Run extreme scenario (200-property record, 1M items)");
+Console.WriteLine("  --all                : Run all BenchmarkDotNet benchmarks");
 Console.WriteLine("  (no args)            : Run main ArrowCollection benchmarks");
+Console.WriteLine();
+Console.WriteLine("For memory footprint analysis, run the ArrowCollection.MemoryAnalysis project.");
 Console.WriteLine();
 
 BenchmarkRunner.Run<ArrowCollectionBenchmarks>();

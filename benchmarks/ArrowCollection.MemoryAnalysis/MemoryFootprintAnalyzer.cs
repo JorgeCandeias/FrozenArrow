@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
+using ArrowCollection;
 
-namespace ArrowCollection.Benchmarks;
+namespace ArrowCollection.MemoryAnalysis;
 
 /// <summary>
 /// Analyzes the long-term memory footprint of ArrowCollection vs List.
@@ -265,12 +266,12 @@ public static class MemoryFootprintAnalyzer
         GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
     }
 
-    private static List<BenchmarkItem> GenerateItems(int count, int stringCardinality)
+    private static List<MemoryTestItem> GenerateItems(int count, int stringCardinality)
     {
         var baseDate = DateTime.UtcNow;
         var categories = Enumerable.Range(0, stringCardinality).Select(i => $"Category_{i}").ToArray();
         
-        return Enumerable.Range(0, count).Select(i => new BenchmarkItem
+        return Enumerable.Range(0, count).Select(i => new MemoryTestItem
         {
             Id = i,
             Category1 = categories[i % categories.Length],
@@ -281,4 +282,32 @@ public static class MemoryFootprintAnalyzer
             CreatedAt = baseDate.AddSeconds(-i)
         }).ToList();
     }
+}
+
+/// <summary>
+/// Test item for memory footprint analysis.
+/// </summary>
+[ArrowRecord]
+public class MemoryTestItem
+{
+    [ArrowArray]
+    public int Id { get; set; }
+    
+    [ArrowArray]
+    public string Category1 { get; set; } = "";
+    
+    [ArrowArray]
+    public string Category2 { get; set; } = "";
+    
+    [ArrowArray]
+    public string Category3 { get; set; } = "";
+    
+    [ArrowArray]
+    public double Value { get; set; }
+    
+    [ArrowArray]
+    public bool IsActive { get; set; }
+    
+    [ArrowArray]
+    public DateTime CreatedAt { get; set; }
 }

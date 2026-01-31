@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/benchmarks/">
     <Project Path="benchmarks/ArrowCollection.Benchmarks/ArrowCollection.Benchmarks.csproj" />
+    <Project Path="benchmarks/ArrowCollection.MemoryAnalysis/ArrowCollection.MemoryAnalysis.csproj" />
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/ArrowCollection.Sample/ArrowCollection.Sample.csproj" />
