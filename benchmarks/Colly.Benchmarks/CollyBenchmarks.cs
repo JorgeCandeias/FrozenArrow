@@ -28,9 +28,9 @@ public class CollyBenchmarks
         _items1M = GenerateItems(1_000_000);
 
         // Pre-built lists for enumeration benchmarks
-        _list10K = new List<BenchmarkItem>(_items10K);
-        _list100K = new List<BenchmarkItem>(_items100K);
-        _list1M = new List<BenchmarkItem>(_items1M);
+        _list10K = [.. _items10K];
+        _list100K = [.. _items100K];
+        _list1M = [.. _items1M];
 
         // Pre-built Colly collections for enumeration benchmarks
         _colly10K = _items10K.ToColly();
@@ -50,12 +50,20 @@ public class CollyBenchmarks
     {
         var items = new List<BenchmarkItem>(count);
         var baseDate = DateTime.UtcNow;
+        
+        // Generate distinct strings upfront to avoid duplication in memory
+        var category1 = Enumerable.Range(0, 10).Select(i => $"Item_{i}").ToArray();
+        var category2 = Enumerable.Range(0, 100).Select(i => $"Item_{i}").ToArray();
+        var category3 = Enumerable.Range(0, 1000).Select(i => $"Item_{i}").ToArray();
+
         for (int i = 0; i < count; i++)
         {
             items.Add(new BenchmarkItem
             {
                 Id = i,
-                Name = $"Item_{i}",
+                Category1 = category1[i % category1.Length],
+                Category2 = category2[i % category2.Length],
+                Category3 = category3[i % category3.Length],
                 Value = i * 1.5,
                 IsActive = i % 2 == 0,
                 CreatedAt = baseDate.AddSeconds(-i)
@@ -212,7 +220,9 @@ public class CollyBenchmarks
 public class BenchmarkItem
 {
     public int Id { get; set; }
-    public string Name { get; set; } = "";
+    public string Category1 { get; set; } = "";
+    public string Category2 { get; set; } = "";
+    public string Category3 { get; set; } = "";
     public double Value { get; set; }
     public bool IsActive { get; set; }
     public DateTime CreatedAt { get; set; }
