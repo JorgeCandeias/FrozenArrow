@@ -174,13 +174,11 @@ public static class MemoryFootprintAnalyzer
 
     private static (long listManaged, long arrowManaged, long arrowNativeEstimate) MeasureFootprint(int itemCount)
     {
-        var sourceItems = GenerateItems(itemCount, stringCardinality: 100);
-        
-        // Measure List<T> managed heap footprint
+        // Measure List<T> managed heap footprint - generate items within scope
         ForceFullGC();
         var beforeList = GC.GetTotalMemory(true);
         
-        var list = sourceItems.ToList();
+        var list = GenerateItems(itemCount, stringCardinality: 100);
         
         ForceFullGC();
         var listManaged = GC.GetTotalMemory(true) - beforeList;
@@ -189,11 +187,11 @@ public static class MemoryFootprintAnalyzer
         list = null;
         ForceFullGC();
         
-        // Measure ArrowCollection managed wrapper overhead
+        // Measure ArrowCollection managed wrapper overhead - generate fresh items
         ForceFullGC();
         var beforeArrow = GC.GetTotalMemory(true);
         
-        var arrowCollection = sourceItems.ToArrowCollection();
+        var arrowCollection = GenerateItemsEnumerable(itemCount, stringCardinality: 100).ToArrowCollection();
         
         ForceFullGC();
         var arrowManaged = GC.GetTotalMemory(true) - beforeArrow;
@@ -281,6 +279,26 @@ public static class MemoryFootprintAnalyzer
             IsActive = i % 2 == 0,
             CreatedAt = baseDate.AddSeconds(-i)
         }).ToList();
+    }
+
+    private static IEnumerable<MemoryTestItem> GenerateItemsEnumerable(int count, int stringCardinality)
+    {
+        var baseDate = DateTime.UtcNow;
+        var categories = Enumerable.Range(0, stringCardinality).Select(i => $"Category_{i}").ToArray();
+        
+        for (int i = 0; i < count; i++)
+        {
+            yield return new MemoryTestItem
+            {
+                Id = i,
+                Category1 = categories[i % categories.Length],
+                Category2 = categories[(i + 33) % categories.Length],
+                Category3 = categories[(i + 67) % categories.Length],
+                Value = i * 1.5,
+                IsActive = i % 2 == 0,
+                CreatedAt = baseDate.AddSeconds(-i)
+            };
+        }
     }
 }
 

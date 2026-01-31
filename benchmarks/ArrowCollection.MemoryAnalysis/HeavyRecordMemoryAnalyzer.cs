@@ -172,19 +172,13 @@ public static class HeavyRecordMemoryAnalyzer
 
     private static void RunEmpiricalAnalysis()
     {
-        Console.WriteLine("Generating source data...");
-        var sourceItems = GenerateHeavyItems(ItemCount);
-        ForceFullGC();
-
-        Console.WriteLine($"Source data generated: {ItemCount:N0} items");
-        Console.WriteLine();
-
-        // Measure List<T>
+        // Measure List<T> - generate items within measurement scope to capture object memory
         Console.WriteLine("Measuring List<HeavyBenchmarkItem> memory footprint...");
+        Console.WriteLine("  (Generating 1M items and storing in List<T>...)");
         ForceFullGC();
         var beforeList = GC.GetTotalMemory(true);
 
-        var list = sourceItems.ToList();
+        var list = GenerateHeavyItems(ItemCount);
 
         ForceFullGC();
         var listMemory = GC.GetTotalMemory(true) - beforeList;
@@ -192,16 +186,20 @@ public static class HeavyRecordMemoryAnalyzer
         var listGB = listMemory / (1024.0 * 1024.0 * 1024.0);
 
         Console.WriteLine($"  List<T> managed heap: {listMB:F2} MB ({listGB:F4} GB)");
+        Console.WriteLine();
 
         // Keep list alive while measuring Arrow
         GC.KeepAlive(list);
 
-        // Measure ArrowCollection
+        // Measure ArrowCollection - generate fresh items and convert within measurement scope
         Console.WriteLine("Measuring ArrowCollection<HeavyBenchmarkItem> memory footprint...");
+        Console.WriteLine("  (Generating 1M items and converting to ArrowCollection...)");
         ForceFullGC();
         var beforeArrow = GC.GetTotalMemory(true);
 
-        var arrowCollection = sourceItems.ToArrowCollection();
+        // Generate items as IEnumerable (lazy) and convert directly to Arrow
+        // This measures only the Arrow storage, not source objects
+        var arrowCollection = GenerateHeavyItemsEnumerable(ItemCount).ToArrowCollection();
 
         ForceFullGC();
         var arrowManagedMemory = GC.GetTotalMemory(true) - beforeArrow;
@@ -337,6 +335,90 @@ public static class HeavyRecordMemoryAnalyzer
         }
 
         return items;
+    }
+
+    private static IEnumerable<HeavyMemoryTestItem> GenerateHeavyItemsEnumerable(int count)
+    {
+        var baseDate = DateTime.UtcNow;
+
+        // Pre-generate string pools for low cardinality
+        var stringPools = new string[10][];
+        for (int pool = 0; pool < 10; pool++)
+        {
+            stringPools[pool] = Enumerable.Range(0, StringCardinality)
+                .Select(i => $"Category{pool:D2}_{i:D3}")
+                .ToArray();
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            yield return new HeavyMemoryTestItem
+            {
+                // Strings with low cardinality
+                String01 = stringPools[0][i % StringCardinality],
+                String02 = stringPools[1][i % StringCardinality],
+                String03 = stringPools[2][i % StringCardinality],
+                String04 = stringPools[3][i % StringCardinality],
+                String05 = stringPools[4][i % StringCardinality],
+                String06 = stringPools[5][i % StringCardinality],
+                String07 = stringPools[6][i % StringCardinality],
+                String08 = stringPools[7][i % StringCardinality],
+                String09 = stringPools[8][i % StringCardinality],
+                String10 = stringPools[9][i % StringCardinality],
+
+                // DateTimes with high cardinality
+                Timestamp01 = baseDate.AddMilliseconds(-i * 5),
+                Timestamp02 = baseDate.AddMilliseconds(-i * 7),
+                Timestamp03 = baseDate.AddMilliseconds(-i * 11),
+                Timestamp04 = baseDate.AddMilliseconds(-i * 13),
+                Timestamp05 = baseDate.AddMilliseconds(-i * 17),
+
+                // Int fields
+                Int001 = i, Int002 = i + 1, Int003 = i + 2, Int004 = i + 3, Int005 = i + 4,
+                Int006 = i + 5, Int007 = i + 6, Int008 = i + 7, Int009 = i + 8, Int010 = i + 9,
+                Int011 = i + 10, Int012 = i + 11, Int013 = i + 12, Int014 = i + 13, Int015 = i + 14,
+                Int016 = i + 15, Int017 = i + 16, Int018 = i + 17, Int019 = i + 18, Int020 = i + 19,
+                Int021 = i + 20, Int022 = i + 21, Int023 = i + 22, Int024 = i + 23, Int025 = i + 24,
+                Int026 = i + 25, Int027 = i + 26, Int028 = i + 27, Int029 = i + 28, Int030 = i + 29,
+                Int031 = i + 30, Int032 = i + 31, Int033 = i + 32, Int034 = i + 33, Int035 = i + 34,
+                Int036 = i + 35, Int037 = i + 36, Int038 = i + 37, Int039 = i + 38, Int040 = i + 39,
+                Int041 = i + 40, Int042 = i + 41, Int043 = i + 42, Int044 = i + 43, Int045 = i + 44,
+                Int046 = i + 45, Int047 = i + 46, Int048 = i + 47, Int049 = i + 48, Int050 = i + 49,
+                Int051 = i + 50, Int052 = i + 51, Int053 = i + 52, Int054 = i + 53, Int055 = i + 54,
+                Int056 = i + 55, Int057 = i + 56, Int058 = i + 57, Int059 = i + 58, Int060 = i + 59,
+                Int061 = i + 60, Int062 = i + 61,
+
+                // Double fields
+                Double001 = i * 0.001, Double002 = i * 0.002, Double003 = i * 0.003, Double004 = i * 0.004, Double005 = i * 0.005,
+                Double006 = i * 0.006, Double007 = i * 0.007, Double008 = i * 0.008, Double009 = i * 0.009, Double010 = i * 0.010,
+                Double011 = i * 0.011, Double012 = i * 0.012, Double013 = i * 0.013, Double014 = i * 0.014, Double015 = i * 0.015,
+                Double016 = i * 0.016, Double017 = i * 0.017, Double018 = i * 0.018, Double019 = i * 0.019, Double020 = i * 0.020,
+                Double021 = i * 0.021, Double022 = i * 0.022, Double023 = i * 0.023, Double024 = i * 0.024, Double025 = i * 0.025,
+                Double026 = i * 0.026, Double027 = i * 0.027, Double028 = i * 0.028, Double029 = i * 0.029, Double030 = i * 0.030,
+                Double031 = i * 0.031, Double032 = i * 0.032, Double033 = i * 0.033, Double034 = i * 0.034, Double035 = i * 0.035,
+                Double036 = i * 0.036, Double037 = i * 0.037, Double038 = i * 0.038, Double039 = i * 0.039, Double040 = i * 0.040,
+                Double041 = i * 0.041, Double042 = i * 0.042, Double043 = i * 0.043, Double044 = i * 0.044, Double045 = i * 0.045,
+                Double046 = i * 0.046, Double047 = i * 0.047, Double048 = i * 0.048, Double049 = i * 0.049, Double050 = i * 0.050,
+                Double051 = i * 0.051, Double052 = i * 0.052, Double053 = i * 0.053, Double054 = i * 0.054, Double055 = i * 0.055,
+                Double056 = i * 0.056, Double057 = i * 0.057, Double058 = i * 0.058, Double059 = i * 0.059, Double060 = i * 0.060,
+                Double061 = i * 0.061, Double062 = i * 0.062,
+
+                // Decimal fields
+                Decimal001 = i * 0.001m, Decimal002 = i * 0.002m, Decimal003 = i * 0.003m, Decimal004 = i * 0.004m, Decimal005 = i * 0.005m,
+                Decimal006 = i * 0.006m, Decimal007 = i * 0.007m, Decimal008 = i * 0.008m, Decimal009 = i * 0.009m, Decimal010 = i * 0.010m,
+                Decimal011 = i * 0.011m, Decimal012 = i * 0.012m, Decimal013 = i * 0.013m, Decimal014 = i * 0.014m, Decimal015 = i * 0.015m,
+                Decimal016 = i * 0.016m, Decimal017 = i * 0.017m, Decimal018 = i * 0.018m, Decimal019 = i * 0.019m, Decimal020 = i * 0.020m,
+                Decimal021 = i * 0.021m, Decimal022 = i * 0.022m, Decimal023 = i * 0.023m, Decimal024 = i * 0.024m, Decimal025 = i * 0.025m,
+                Decimal026 = i * 0.026m, Decimal027 = i * 0.027m, Decimal028 = i * 0.028m, Decimal029 = i * 0.029m, Decimal030 = i * 0.030m,
+                Decimal031 = i * 0.031m, Decimal032 = i * 0.032m, Decimal033 = i * 0.033m, Decimal034 = i * 0.034m, Decimal035 = i * 0.035m,
+                Decimal036 = i * 0.036m, Decimal037 = i * 0.037m, Decimal038 = i * 0.038m, Decimal039 = i * 0.039m, Decimal040 = i * 0.040m,
+                Decimal041 = i * 0.041m, Decimal042 = i * 0.042m, Decimal043 = i * 0.043m, Decimal044 = i * 0.044m, Decimal045 = i * 0.045m,
+                Decimal046 = i * 0.046m, Decimal047 = i * 0.047m, Decimal048 = i * 0.048m, Decimal049 = i * 0.049m, Decimal050 = i * 0.050m,
+                Decimal051 = i * 0.051m, Decimal052 = i * 0.052m, Decimal053 = i * 0.053m, Decimal054 = i * 0.054m, Decimal055 = i * 0.055m,
+                Decimal056 = i * 0.056m, Decimal057 = i * 0.057m, Decimal058 = i * 0.058m, Decimal059 = i * 0.059m, Decimal060 = i * 0.060m,
+                Decimal061 = i * 0.061m
+            };
+        }
     }
 
     private static void ForceFullGC()
