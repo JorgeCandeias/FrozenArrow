@@ -25,15 +25,21 @@ public static class EnumerableExtensions
     {
         ArgumentNullException.ThrowIfNull(source);
 
-        // Get all public instance properties
+        // Verify the type is marked with ArrowRecordAttribute
+        if (typeof(T).GetCustomAttribute<ArrowRecordAttribute>() is null)
+        {
+            throw new InvalidOperationException($"Type {typeof(T).Name} must be marked with {nameof(ArrowRecordAttribute)} to be used with {nameof(ArrowCollection<T>)}.");
+        }
+
+        // Get all public instance properties marked with ArrowArrayAttribute
         var properties = typeof(T)
             .GetProperties(BindingFlags.Public | BindingFlags.Instance)
-            .Where(p => p.CanRead && p.CanWrite)
+            .Where(p => p.CanRead && p.CanWrite && p.GetCustomAttribute<ArrowArrayAttribute>() != null)
             .ToArray();
 
         if (properties.Length == 0)
         {
-            throw new InvalidOperationException($"Type {typeof(T).Name} has no readable and writable public instance properties.");
+            throw new InvalidOperationException($"Type {typeof(T).Name} has no readable and writable public instance properties marked with {nameof(ArrowArrayAttribute)}.");
         }
 
         // Materialize the source

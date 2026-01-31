@@ -2,30 +2,48 @@ namespace ArrowCollection.Tests;
 
 public class ArrowCollectionTests
 {
+    [ArrowRecord]
     public class SimpleItem
     {
+        [ArrowArray]
         public int Id { get; set; }
+        [ArrowArray]
         public string Name { get; set; } = string.Empty;
+        [ArrowArray]
         public double Value { get; set; }
     }
 
+    [ArrowRecord]
     public class ComplexItem
     {
+        [ArrowArray]
         public int IntValue { get; set; }
+        [ArrowArray]
         public long LongValue { get; set; }
+        [ArrowArray]
         public short ShortValue { get; set; }
+        [ArrowArray]
         public byte ByteValue { get; set; }
+        [ArrowArray]
         public float FloatValue { get; set; }
+        [ArrowArray]
         public double DoubleValue { get; set; }
+        [ArrowArray]
         public bool BoolValue { get; set; }
+        [ArrowArray]
         public string? StringValue { get; set; }
+        [ArrowArray]
         public DateTime DateTimeValue { get; set; }
     }
 
+    [ArrowRecord]
     public class NullableItem
     {
+        [ArrowArray]
         public int? NullableInt { get; set; }
+        [ArrowArray]
         public string? NullableString { get; set; }
+        [ArrowArray]
         public DateTime? NullableDateTime { get; set; }
     }
 

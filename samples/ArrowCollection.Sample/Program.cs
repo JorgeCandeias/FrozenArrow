@@ -94,13 +94,20 @@ Console.WriteLine("\n================================");
 Console.WriteLine("Demo completed!");
 
 // Define a sample data type
+[ArrowRecord]
 public class WeatherData
 {
+    [ArrowArray]
     public int Id { get; set; }
+    [ArrowArray]
     public string Location { get; set; } = string.Empty;
+    [ArrowArray]
     public double Temperature { get; set; }
+    [ArrowArray]
     public double Humidity { get; set; }
+    [ArrowArray]
     public DateTime Timestamp { get; set; }
+    [ArrowArray]
     public bool IsRaining { get; set; }
 }
 

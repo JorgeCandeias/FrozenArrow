@@ -217,14 +217,22 @@ public class ArrowCollectionBenchmarks
     #endregion
 }
 
+[ArrowRecord]
 public sealed record BenchmarkItem
 {
+    [ArrowArray]
     public int Id { get; set; }
+    [ArrowArray]
     public string Category1 { get; set; } = "";
+    [ArrowArray]
     public string Category2 { get; set; } = "";
+    [ArrowArray]
     public string Category3 { get; set; } = "";
+    [ArrowArray]
     public double Value { get; set; }
+    [ArrowArray]
     public bool IsActive { get; set; }
+    [ArrowArray]
     public DateTime CreatedAt { get; set; }
 }
 
