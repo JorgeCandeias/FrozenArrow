@@ -30,4 +30,12 @@ internal static class DiagnosticDescriptors
         category: "ArrowCollection",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor ManualPropertyNotSupported = new(
+        id: "ARROWCOL004",
+        title: "Manual property not supported",
+        messageFormat: "ArrowArrayAttribute on property '{0}' is not supported because it is not an auto-property. Use the attribute on a field instead.",
+        category: "ArrowCollection",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
 }

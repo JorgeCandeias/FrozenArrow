@@ -59,20 +59,57 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
         if (!hasArrowRecordAttribute)
             return null;
 
-        // Collect properties marked with ArrowArray attribute
-        var properties = new List<ArrowPropertyInfo>();
+        // Collect fields and properties marked with ArrowArray attribute
+        var fields = new List<ArrowFieldInfo>();
+        var diagnostics = new List<(DiagnosticDescriptor Descriptor, Location Location, object[] Args)>();
+
         foreach (var member in symbol.GetMembers())
         {
-            if (member is IPropertySymbol property &&
-                property.DeclaredAccessibility == Accessibility.Public &&
-                property.GetMethod is not null &&
-                property.SetMethod is not null)
+            // Handle fields directly marked with [ArrowArray]
+            if (member is IFieldSymbol field && !IsCompilerGeneratedBackingField(field))
             {
-                var hasArrowArrayAttribute = property.GetAttributes()
+                var hasArrowArrayAttribute = field.GetAttributes()
                     .Any(attr => attr.AttributeClass?.ToDisplayString() == ArrowArrayAttributeName);
 
                 if (hasArrowArrayAttribute)
                 {
+                    var fieldType = field.Type;
+                    var isNullable = fieldType.NullableAnnotation == NullableAnnotation.Annotated ||
+                                     (fieldType is INamedTypeSymbol namedType &&
+                                      namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T);
+
+                    var underlyingType = GetUnderlyingType(fieldType);
+
+                    fields.Add(new ArrowFieldInfo(
+                        field.Name,
+                        field.Name, // Field name is also the backing field name
+                        fieldType.ToDisplayString(),
+                        underlyingType,
+                        isNullable));
+                }
+            }
+            // Handle properties marked with [ArrowArray] (including [field: ArrowArray] syntax)
+            else if (member is IPropertySymbol property)
+            {
+                // Check for attribute on property or on its backing field
+                var hasArrowArrayOnProperty = property.GetAttributes()
+                    .Any(attr => attr.AttributeClass?.ToDisplayString() == ArrowArrayAttributeName);
+
+                if (hasArrowArrayOnProperty)
+                {
+                    // Check if this is an auto-property by looking for synthesized backing field
+                    var isAutoProperty = IsAutoProperty(property);
+
+                    if (!isAutoProperty)
+                    {
+                        // Manual property - emit diagnostic
+                        var location = property.Locations.FirstOrDefault() ?? Location.None;
+                        diagnostics.Add((DiagnosticDescriptors.ManualPropertyNotSupported, location, new object[] { property.Name }));
+                        continue;
+                    }
+
+                    // Auto-property - use its backing field
+                    var backingFieldName = $"<{property.Name}>k__BackingField";
                     var propertyType = property.Type;
                     var isNullable = propertyType.NullableAnnotation == NullableAnnotation.Annotated ||
                                      (propertyType is INamedTypeSymbol namedType &&
@@ -80,8 +117,9 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
 
                     var underlyingType = GetUnderlyingType(propertyType);
 
-                    properties.Add(new ArrowPropertyInfo(
+                    fields.Add(new ArrowFieldInfo(
                         property.Name,
+                        backingFieldName,
                         propertyType.ToDisplayString(),
                         underlyingType,
                         isNullable));
@@ -89,7 +127,8 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
             }
         }
 
-        if (properties.Count == 0)
+        // Return null if there are validation errors - they'll be reported during Execute
+        if (fields.Count == 0 && diagnostics.Count == 0)
             return null;
 
         var namespaceName = symbol.ContainingNamespace.IsGlobalNamespace
@@ -100,7 +139,49 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
             symbol.Name,
             namespaceName,
             symbol.ToDisplayString(),
-            properties);
+            fields,
+            diagnostics);
+    }
+
+    private static bool IsCompilerGeneratedBackingField(IFieldSymbol field)
+    {
+        // Compiler-generated backing fields have names like <PropertyName>k__BackingField
+        // and have the CompilerGenerated attribute
+        return field.Name.StartsWith("<") && field.Name.EndsWith(">k__BackingField") &&
+               field.GetAttributes().Any(attr =>
+                   attr.AttributeClass?.ToDisplayString() == "System.Runtime.CompilerServices.CompilerGeneratedAttribute");
+    }
+
+    private static bool IsAutoProperty(IPropertySymbol property)
+    {
+        // An auto-property has both getter and setter (or is get-only with init)
+        // and neither accessor has user-defined code (they're compiler-generated)
+        
+        // Must have a getter
+        if (property.GetMethod is null)
+            return false;
+
+        // Check if the getter is compiler-synthesized
+        // Auto-properties have synthesized accessors that are associated with a backing field
+        var getter = property.GetMethod;
+        
+        // If the property has an associated field, it's an auto-property
+        // We can check this by looking at the containing type's members for the backing field
+        var backingFieldName = $"<{property.Name}>k__BackingField";
+        var containingType = property.ContainingType;
+        
+        foreach (var member in containingType.GetMembers())
+        {
+            if (member is IFieldSymbol field && field.Name == backingFieldName)
+            {
+                // Found the backing field - check if it's compiler-generated
+                return field.IsImplicitlyDeclared || 
+                       field.GetAttributes().Any(attr =>
+                           attr.AttributeClass?.ToDisplayString() == "System.Runtime.CompilerServices.CompilerGeneratedAttribute");
+            }
+        }
+
+        return false;
     }
 
     private static string GetUnderlyingType(ITypeSymbol type)
@@ -127,19 +208,37 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
         if (arrowRecords.IsDefaultOrEmpty)
             return;
 
+        // Report diagnostics first
+        foreach (var record in arrowRecords)
+        {
+            foreach (var (descriptor, location, args) in record.Diagnostics)
+            {
+                context.ReportDiagnostic(Diagnostic.Create(descriptor, location, args));
+            }
+        }
+
+        // Filter to only valid records (those with fields and no errors)
+        var validRecords = arrowRecords
+            .Where(r => r.Fields.Count > 0 && r.Diagnostics.Count == 0)
+            .Distinct()
+            .ToList();
+
+        if (validRecords.Count == 0)
+            return;
+
         // Generate implementation for each ArrowRecord type
-        foreach (var record in arrowRecords.Distinct())
+        foreach (var record in validRecords)
         {
             var source = GenerateArrowCollectionImplementation(record);
             context.AddSource($"ArrowCollection_{record.ClassName}.g.cs", SourceText.From(source, Encoding.UTF8));
         }
 
         // Generate the factory registry for this assembly
-        var registrySource = GenerateFactoryRegistry(arrowRecords);
+        var registrySource = GenerateFactoryRegistry(validRecords);
         context.AddSource("ArrowCollectionFactoryRegistry.g.cs", SourceText.From(registrySource, Encoding.UTF8));
 
         // Generate the module initializer to register factories
-        var moduleInitializerSource = GenerateModuleInitializer(arrowRecords);
+        var moduleInitializerSource = GenerateModuleInitializer(validRecords);
         context.AddSource("ArrowCollectionModuleInitializer.g.cs", SourceText.From(moduleInitializerSource, Encoding.UTF8));
     }
 
@@ -153,6 +252,7 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
         sb.AppendLine("using Apache.Arrow.Memory;");
         sb.AppendLine("using Apache.Arrow.Types;");
         sb.AppendLine("using System.Collections;");
+        sb.AppendLine("using System.Reflection;");
         sb.AppendLine();
 
         if (record.Namespace is not null)
@@ -166,6 +266,29 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
         // Generate the concrete ArrowCollection implementation
         sb.AppendLine($"{indent}internal sealed class GeneratedArrowCollection_{record.ClassName} : global::ArrowCollection.ArrowCollection<{record.FullTypeName}>");
         sb.AppendLine($"{indent}{{");
+        
+        // Generate static field accessors (cached for performance)
+        for (int i = 0; i < record.Fields.Count; i++)
+        {
+            var field = record.Fields[i];
+            var escapedBackingFieldName = EscapeStringLiteral(field.BackingFieldName);
+            sb.AppendLine($"{indent}    private static readonly global::System.Action<{record.FullTypeName}, {field.FieldTypeName}> _setter{i} = GetSetter{i}();");
+        }
+        sb.AppendLine();
+
+        // Generate static methods to get setters
+        for (int i = 0; i < record.Fields.Count; i++)
+        {
+            var field = record.Fields[i];
+            var escapedBackingFieldName = EscapeStringLiteral(field.BackingFieldName);
+            sb.AppendLine($"{indent}    private static global::System.Action<{record.FullTypeName}, {field.FieldTypeName}> GetSetter{i}()");
+            sb.AppendLine($"{indent}    {{");
+            sb.AppendLine($"{indent}        var fieldInfo = typeof({record.FullTypeName}).GetField(\"{escapedBackingFieldName}\", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)!;");
+            sb.AppendLine($"{indent}        return global::ArrowCollection.FieldAccessor.GetSetter<{record.FullTypeName}, {field.FieldTypeName}>(fieldInfo);");
+            sb.AppendLine($"{indent}    }}");
+            sb.AppendLine();
+        }
+
         sb.AppendLine($"{indent}    internal GeneratedArrowCollection_{record.ClassName}(RecordBatch recordBatch, int count)");
         sb.AppendLine($"{indent}        : base(recordBatch, count)");
         sb.AppendLine($"{indent}    {{");
@@ -178,10 +301,10 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
         sb.AppendLine($"{indent}        var item = new {record.FullTypeName}();");
         sb.AppendLine();
 
-        for (int i = 0; i < record.Properties.Count; i++)
+        for (int i = 0; i < record.Fields.Count; i++)
         {
-            var prop = record.Properties[i];
-            GeneratePropertyRead(sb, prop, i, indent + "        ");
+            var field = record.Fields[i];
+            GenerateFieldRead(sb, field, i, indent + "        ");
         }
 
         sb.AppendLine();
@@ -193,6 +316,28 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
         sb.AppendLine();
         sb.AppendLine($"{indent}internal static class ArrowCollectionBuilder_{record.ClassName}");
         sb.AppendLine($"{indent}{{");
+        
+        // Generate static field getters (cached for performance)
+        for (int i = 0; i < record.Fields.Count; i++)
+        {
+            var field = record.Fields[i];
+            sb.AppendLine($"{indent}    private static readonly global::System.Func<{record.FullTypeName}, {field.FieldTypeName}> _getter{i} = GetGetter{i}();");
+        }
+        sb.AppendLine();
+
+        // Generate static methods to get getters
+        for (int i = 0; i < record.Fields.Count; i++)
+        {
+            var field = record.Fields[i];
+            var escapedBackingFieldName = EscapeStringLiteral(field.BackingFieldName);
+            sb.AppendLine($"{indent}    private static global::System.Func<{record.FullTypeName}, {field.FieldTypeName}> GetGetter{i}()");
+            sb.AppendLine($"{indent}    {{");
+            sb.AppendLine($"{indent}        var fieldInfo = typeof({record.FullTypeName}).GetField(\"{escapedBackingFieldName}\", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)!;");
+            sb.AppendLine($"{indent}        return global::ArrowCollection.FieldAccessor.GetGetter<{record.FullTypeName}, {field.FieldTypeName}>(fieldInfo);");
+            sb.AppendLine($"{indent}    }}");
+            sb.AppendLine();
+        }
+
         sb.AppendLine($"{indent}    internal static global::ArrowCollection.ArrowCollection<{record.FullTypeName}> Create(global::System.Collections.Generic.IEnumerable<{record.FullTypeName}> source)");
         sb.AppendLine($"{indent}    {{");
         sb.AppendLine($"{indent}        var items = source is global::System.Collections.Generic.ICollection<{record.FullTypeName}> col ? col : new global::System.Collections.Generic.List<{record.FullTypeName}>(source);");
@@ -202,13 +347,13 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
         sb.AppendLine($"{indent}        var fields = new global::System.Collections.Generic.List<Field>");
         sb.AppendLine($"{indent}        {{");
 
-        for (int i = 0; i < record.Properties.Count; i++)
+        for (int i = 0; i < record.Fields.Count; i++)
         {
-            var prop = record.Properties[i];
-            var arrowType = GetArrowTypeExpression(prop.UnderlyingTypeName);
-            var nullable = prop.IsNullable ? "true" : "false";
-            var comma = i < record.Properties.Count - 1 ? "," : "";
-            sb.AppendLine($"{indent}            new Field(\"{prop.PropertyName}\", {arrowType}, {nullable}){comma}");
+            var field = record.Fields[i];
+            var arrowType = GetArrowTypeExpression(field.UnderlyingTypeName);
+            var nullable = field.IsNullable ? "true" : "false";
+            var comma = i < record.Fields.Count - 1 ? "," : "";
+            sb.AppendLine($"{indent}            new Field(\"{field.MemberName}\", {arrowType}, {nullable}){comma}");
         }
 
         sb.AppendLine($"{indent}        }};");
@@ -219,11 +364,11 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
         sb.AppendLine($"{indent}        var arrays = new global::System.Collections.Generic.List<IArrowArray>();");
         sb.AppendLine();
 
-        // Generate array builders for each property
-        for (int i = 0; i < record.Properties.Count; i++)
+        // Generate array builders for each field
+        for (int i = 0; i < record.Fields.Count; i++)
         {
-            var prop = record.Properties[i];
-            GenerateArrayBuilder(sb, prop, i, indent + "        ");
+            var field = record.Fields[i];
+            GenerateArrayBuilder(sb, field, i, indent + "        ");
             sb.AppendLine();
         }
 
@@ -242,27 +387,27 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
         return sb.ToString();
     }
 
-    private static void GeneratePropertyRead(StringBuilder sb, ArrowPropertyInfo prop, int columnIndex, string indent)
+    private static void GenerateFieldRead(StringBuilder sb, ArrowFieldInfo field, int columnIndex, string indent)
     {
-        var arrayType = GetArrowArrayType(prop.UnderlyingTypeName);
+        var arrayType = GetArrowArrayType(field.UnderlyingTypeName);
         var varName = $"array{columnIndex}";
 
         sb.AppendLine($"{indent}var {varName} = (recordBatch.Column({columnIndex}) as {arrayType})!;");
 
-        if (prop.IsNullable)
+        if (field.IsNullable)
         {
             sb.AppendLine($"{indent}if (!{varName}.IsNull(index))");
             sb.AppendLine($"{indent}{{");
-            sb.AppendLine($"{indent}    item.{prop.PropertyName} = {GetValueExtraction(varName, prop.UnderlyingTypeName)};");
+            sb.AppendLine($"{indent}    _setter{columnIndex}(item, {GetValueExtraction(varName, field.UnderlyingTypeName, field.IsNullable)});");
             sb.AppendLine($"{indent}}}");
         }
         else
         {
-            sb.AppendLine($"{indent}item.{prop.PropertyName} = {GetValueExtraction(varName, prop.UnderlyingTypeName)};");
+            sb.AppendLine($"{indent}_setter{columnIndex}(item, {GetValueExtraction(varName, field.UnderlyingTypeName, field.IsNullable)});");
         }
     }
 
-    private static string GetValueExtraction(string varName, string underlyingType)
+    private static string GetValueExtraction(string varName, string underlyingType, bool isNullable)
     {
         return underlyingType switch
         {
@@ -283,12 +428,12 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
         };
     }
 
-    private static void GenerateArrayBuilder(StringBuilder sb, ArrowPropertyInfo prop, int index, string indent)
+    private static void GenerateArrayBuilder(StringBuilder sb, ArrowFieldInfo field, int index, string indent)
     {
-        var builderType = GetArrowBuilderType(prop.UnderlyingTypeName);
+        var builderType = GetArrowBuilderType(field.UnderlyingTypeName);
         var builderVarName = $"builder{index}";
 
-        if (prop.UnderlyingTypeName == "System.DateTime")
+        if (field.UnderlyingTypeName == "System.DateTime")
         {
             sb.AppendLine($"{indent}var {builderVarName} = new {builderType}(new TimestampType(TimeUnit.Millisecond, global::System.TimeZoneInfo.Utc)).Reserve(count);");
         }
@@ -300,18 +445,18 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
         sb.AppendLine($"{indent}foreach (var item in items)");
         sb.AppendLine($"{indent}{{");
 
-        if (prop.IsNullable)
+        if (field.IsNullable)
         {
-            sb.AppendLine($"{indent}    var value{index} = item.{prop.PropertyName};");
+            sb.AppendLine($"{indent}    var value{index} = _getter{index}(item);");
             sb.AppendLine($"{indent}    if (value{index} == null)");
             sb.AppendLine($"{indent}        {builderVarName}.AppendNull();");
             sb.AppendLine($"{indent}    else");
 
-            if (prop.UnderlyingTypeName == "System.DateTime")
+            if (field.UnderlyingTypeName == "System.DateTime")
             {
                 sb.AppendLine($"{indent}        {builderVarName}.Append(new global::System.DateTimeOffset(value{index}.Value, global::System.TimeSpan.Zero));");
             }
-            else if (prop.UnderlyingTypeName == "string")
+            else if (field.UnderlyingTypeName == "string")
             {
                 // String is a reference type, doesn't need .Value
                 sb.AppendLine($"{indent}        {builderVarName}.Append(value{index});");
@@ -323,14 +468,14 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
         }
         else
         {
-            if (prop.UnderlyingTypeName == "System.DateTime")
+            if (field.UnderlyingTypeName == "System.DateTime")
             {
-                sb.AppendLine($"{indent}    {builderVarName}.Append(new global::System.DateTimeOffset(item.{prop.PropertyName}, global::System.TimeSpan.Zero));");
+                sb.AppendLine($"{indent}    {builderVarName}.Append(new global::System.DateTimeOffset(_getter{index}(item), global::System.TimeSpan.Zero));");
             }
-            else if (prop.UnderlyingTypeName == "string")
+            else if (field.UnderlyingTypeName == "string")
             {
                 // String is a reference type, handle null as empty or null
-                sb.AppendLine($"{indent}    var value{index} = item.{prop.PropertyName};");
+                sb.AppendLine($"{indent}    var value{index} = _getter{index}(item);");
                 sb.AppendLine($"{indent}    if (value{index} == null)");
                 sb.AppendLine($"{indent}        {builderVarName}.AppendNull();");
                 sb.AppendLine($"{indent}    else");
@@ -338,7 +483,7 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
             }
             else
             {
-                sb.AppendLine($"{indent}    {builderVarName}.Append(item.{prop.PropertyName});");
+                sb.AppendLine($"{indent}    {builderVarName}.Append(_getter{index}(item));");
             }
         }
 
@@ -409,7 +554,7 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
         };
     }
 
-    private static string GenerateFactoryRegistry(ImmutableArray<ArrowRecordInfo> arrowRecords)
+    private static string GenerateFactoryRegistry(List<ArrowRecordInfo> arrowRecords)
     {
         var sb = new StringBuilder();
         sb.AppendLine("// <auto-generated />");
@@ -422,7 +567,7 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
         sb.AppendLine("        private static readonly global::System.Collections.Generic.Dictionary<global::System.Type, global::System.Delegate> _factories = new()");
         sb.AppendLine("        {");
 
-        foreach (var record in arrowRecords.Distinct())
+        foreach (var record in arrowRecords)
         {
             var builderNamespace = record.Namespace is not null ? $"global::{record.Namespace}." : "global::";
             sb.AppendLine($"            {{ typeof({record.FullTypeName}), new global::System.Func<global::System.Collections.Generic.IEnumerable<{record.FullTypeName}>, global::ArrowCollection.ArrowCollection<{record.FullTypeName}>>({builderNamespace}ArrowCollectionBuilder_{record.ClassName}.Create) }},");
@@ -446,7 +591,7 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
         return sb.ToString();
     }
 
-    private static string GenerateModuleInitializer(ImmutableArray<ArrowRecordInfo> arrowRecords)
+    private static string GenerateModuleInitializer(List<ArrowRecordInfo> arrowRecords)
     {
         var sb = new StringBuilder();
         sb.AppendLine("// <auto-generated />");
@@ -460,7 +605,7 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
         sb.AppendLine("        internal static void Initialize()");
         sb.AppendLine("        {");
 
-        foreach (var record in arrowRecords.Distinct())
+        foreach (var record in arrowRecords)
         {
             var builderNamespace = record.Namespace is not null ? $"global::{record.Namespace}." : "global::";
             sb.AppendLine($"            global::ArrowCollection.ArrowCollectionFactoryRegistry.Register<{record.FullTypeName}>({builderNamespace}ArrowCollectionBuilder_{record.ClassName}.Create);");
@@ -472,6 +617,11 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
 
         return sb.ToString();
     }
+
+    private static string EscapeStringLiteral(string value)
+    {
+        return value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    }
 }
 
 /// <summary>
@@ -479,18 +629,25 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
 /// </summary>
 internal sealed class ArrowRecordInfo : IEquatable<ArrowRecordInfo>
 {
-    public ArrowRecordInfo(string className, string? namespaceName, string fullTypeName, List<ArrowPropertyInfo> properties)
+    public ArrowRecordInfo(
+        string className,
+        string? namespaceName,
+        string fullTypeName,
+        List<ArrowFieldInfo> fields,
+        List<(DiagnosticDescriptor Descriptor, Location Location, object[] Args)> diagnostics)
     {
         ClassName = className;
         Namespace = namespaceName;
         FullTypeName = fullTypeName;
-        Properties = properties;
+        Fields = fields;
+        Diagnostics = diagnostics;
     }
 
     public string ClassName { get; }
     public string? Namespace { get; }
     public string FullTypeName { get; }
-    public List<ArrowPropertyInfo> Properties { get; }
+    public List<ArrowFieldInfo> Fields { get; }
+    public List<(DiagnosticDescriptor Descriptor, Location Location, object[] Args)> Diagnostics { get; }
 
     public bool Equals(ArrowRecordInfo? other)
     {
@@ -503,20 +660,44 @@ internal sealed class ArrowRecordInfo : IEquatable<ArrowRecordInfo>
 }
 
 /// <summary>
-/// Information about a property marked with [ArrowArray].
+/// Information about a field or auto-property backing field marked with [ArrowArray].
 /// </summary>
-internal sealed class ArrowPropertyInfo
+internal sealed class ArrowFieldInfo
 {
-    public ArrowPropertyInfo(string propertyName, string propertyTypeName, string underlyingTypeName, bool isNullable)
+    public ArrowFieldInfo(string memberName, string backingFieldName, string fieldTypeName, string underlyingTypeName, bool isNullable)
     {
-        PropertyName = propertyName;
-        PropertyTypeName = propertyTypeName;
+        MemberName = memberName;
+        BackingFieldName = backingFieldName;
+        FieldTypeName = fieldTypeName;
         UnderlyingTypeName = underlyingTypeName;
         IsNullable = isNullable;
     }
 
-    public string PropertyName { get; }
-    public string PropertyTypeName { get; }
+    /// <summary>
+    /// The name of the field or property as declared in source code.
+    /// Used for Arrow schema field naming.
+    /// </summary>
+    public string MemberName { get; }
+
+    /// <summary>
+    /// The name of the backing field to access via reflection.
+    /// For fields, this is the same as MemberName.
+    /// For auto-properties, this is the compiler-generated backing field name (e.g., "&lt;PropertyName&gt;k__BackingField").
+    /// </summary>
+    public string BackingFieldName { get; }
+
+    /// <summary>
+    /// The full type name of the field.
+    /// </summary>
+    public string FieldTypeName { get; }
+
+    /// <summary>
+    /// The underlying type name (unwrapped from Nullable if applicable).
+    /// </summary>
     public string UnderlyingTypeName { get; }
+
+    /// <summary>
+    /// Whether the field is nullable.
+    /// </summary>
     public bool IsNullable { get; }
 }
