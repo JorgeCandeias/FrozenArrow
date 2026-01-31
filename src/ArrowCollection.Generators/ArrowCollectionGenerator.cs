@@ -495,13 +495,14 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
     {
         sb.AppendLine($"{indent}var {varName} = recordBatch.Column({columnIndex});");
         
+        // Use RunLengthEncodedArrayBuilder which handles RLE, dictionary, and primitive arrays
         var getValue = field.UnderlyingTypeName switch
         {
-            "string" => $"global::ArrowCollection.DictionaryArrayBuilder.GetStringValue({varName}, index)",
-            "int" => $"global::ArrowCollection.DictionaryArrayBuilder.GetInt32Value({varName}, index)",
-            "double" => $"global::ArrowCollection.DictionaryArrayBuilder.GetDoubleValue({varName}, index)",
-            "decimal" => $"global::ArrowCollection.DictionaryArrayBuilder.GetDecimalValue({varName}, index)",
-            _ => throw new NotSupportedException($"Type {field.UnderlyingTypeName} does not support dictionary encoding.")
+            "string" => $"global::ArrowCollection.RunLengthEncodedArrayBuilder.GetStringValue({varName}, index)",
+            "int" => $"global::ArrowCollection.RunLengthEncodedArrayBuilder.GetInt32Value({varName}, index)",
+            "double" => $"global::ArrowCollection.RunLengthEncodedArrayBuilder.GetDoubleValue({varName}, index)",
+            "decimal" => $"global::ArrowCollection.RunLengthEncodedArrayBuilder.GetDecimalValue({varName}, index)",
+            _ => throw new NotSupportedException($"Type {field.UnderlyingTypeName} does not support optimized encoding.")
         };
 
         if (field.IsNullable || field.UnderlyingTypeName == "string")
@@ -641,34 +642,36 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
     }
 
     /// <summary>
-    /// Generates code that builds arrays with optimal encoding (dictionary vs primitive) based on statistics.
+    /// Generates code that builds arrays with optimal encoding (RLE, dictionary, or primitive) based on statistics.
+    /// Encoding priority: RLE > Dictionary > Primitive
     /// </summary>
     private static void GenerateOptimalArrayBuilder(StringBuilder sb, ArrowFieldInfo field, int index, string indent)
     {
         var stats = $"columnStats[\"{field.MemberName}\"]";
         var nullable = field.IsNullable ? "true" : "false";
 
-        // For nullable types, we can't use dictionary encoding directly - use primitive
+        // For nullable types, we can't use advanced encoding directly - use primitive
         if (field.IsNullable)
         {
             GeneratePrimitiveArrayBuilder(sb, field, index, indent, nullable);
             return;
         }
 
-        // For types that support dictionary encoding, generate conditional code
+        // For types that support RLE/dictionary encoding, generate conditional code
+        // The RLE builder internally falls back to dictionary, which falls back to primitive
         switch (field.UnderlyingTypeName)
         {
             case "string":
-                GenerateStringArrayBuilder(sb, field, index, indent, stats, nullable);
+                GenerateOptimalStringArrayBuilder(sb, field, index, indent, stats, nullable);
                 break;
             case "int":
-                GenerateInt32ArrayBuilder(sb, field, index, indent, stats, nullable);
+                GenerateOptimalInt32ArrayBuilder(sb, field, index, indent, stats, nullable);
                 break;
             case "double":
-                GenerateDoubleArrayBuilder(sb, field, index, indent, stats, nullable);
+                GenerateOptimalDoubleArrayBuilder(sb, field, index, indent, stats, nullable);
                 break;
             case "decimal":
-                GenerateDecimalArrayBuilder(sb, field, index, indent, stats, nullable);
+                GenerateOptimalDecimalArrayBuilder(sb, field, index, indent, stats, nullable);
                 break;
             default:
                 // For other types, use primitive encoding
@@ -677,41 +680,41 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
         }
     }
 
-    private static void GenerateStringArrayBuilder(StringBuilder sb, ArrowFieldInfo field, int index, string indent, string stats, string nullable)
+    private static void GenerateOptimalStringArrayBuilder(StringBuilder sb, ArrowFieldInfo field, int index, string indent, string stats, string nullable)
     {
-        sb.AppendLine($"{indent}// Build string array with optional dictionary encoding");
+        sb.AppendLine($"{indent}// Build string array with optimal encoding (RLE > Dictionary > Primitive)");
         sb.AppendLine($"{indent}{{");
-        sb.AppendLine($"{indent}    var array{index} = global::ArrowCollection.DictionaryArrayBuilder.BuildStringArray(values{index}, {stats}, allocator);");
+        sb.AppendLine($"{indent}    var array{index} = global::ArrowCollection.RunLengthEncodedArrayBuilder.BuildStringArray(values{index}, {stats}, allocator);");
         sb.AppendLine($"{indent}    arrays.Add(array{index});");
         sb.AppendLine($"{indent}    schemaFields.Add(new Field(\"{field.MemberName}\", array{index}.Data.DataType, {nullable}));");
         sb.AppendLine($"{indent}}}");
     }
 
-    private static void GenerateInt32ArrayBuilder(StringBuilder sb, ArrowFieldInfo field, int index, string indent, string stats, string nullable)
+    private static void GenerateOptimalInt32ArrayBuilder(StringBuilder sb, ArrowFieldInfo field, int index, string indent, string stats, string nullable)
     {
-        sb.AppendLine($"{indent}// Build int32 array with optional dictionary encoding");
+        sb.AppendLine($"{indent}// Build int32 array with optimal encoding (RLE > Dictionary > Primitive)");
         sb.AppendLine($"{indent}{{");
-        sb.AppendLine($"{indent}    var array{index} = global::ArrowCollection.DictionaryArrayBuilder.BuildInt32Array(values{index}, {stats}, allocator);");
+        sb.AppendLine($"{indent}    var array{index} = global::ArrowCollection.RunLengthEncodedArrayBuilder.BuildInt32Array(values{index}, {stats}, allocator);");
         sb.AppendLine($"{indent}    arrays.Add(array{index});");
         sb.AppendLine($"{indent}    schemaFields.Add(new Field(\"{field.MemberName}\", array{index}.Data.DataType, {nullable}));");
         sb.AppendLine($"{indent}}}");
     }
 
-    private static void GenerateDoubleArrayBuilder(StringBuilder sb, ArrowFieldInfo field, int index, string indent, string stats, string nullable)
+    private static void GenerateOptimalDoubleArrayBuilder(StringBuilder sb, ArrowFieldInfo field, int index, string indent, string stats, string nullable)
     {
-        sb.AppendLine($"{indent}// Build double array with optional dictionary encoding");
+        sb.AppendLine($"{indent}// Build double array with optimal encoding (RLE > Dictionary > Primitive)");
         sb.AppendLine($"{indent}{{");
-        sb.AppendLine($"{indent}    var array{index} = global::ArrowCollection.DictionaryArrayBuilder.BuildDoubleArray(values{index}, {stats}, allocator);");
+        sb.AppendLine($"{indent}    var array{index} = global::ArrowCollection.RunLengthEncodedArrayBuilder.BuildDoubleArray(values{index}, {stats}, allocator);");
         sb.AppendLine($"{indent}    arrays.Add(array{index});");
         sb.AppendLine($"{indent}    schemaFields.Add(new Field(\"{field.MemberName}\", array{index}.Data.DataType, {nullable}));");
         sb.AppendLine($"{indent}}}");
     }
 
-    private static void GenerateDecimalArrayBuilder(StringBuilder sb, ArrowFieldInfo field, int index, string indent, string stats, string nullable)
+    private static void GenerateOptimalDecimalArrayBuilder(StringBuilder sb, ArrowFieldInfo field, int index, string indent, string stats, string nullable)
     {
-        sb.AppendLine($"{indent}// Build decimal array with optional dictionary encoding");
+        sb.AppendLine($"{indent}// Build decimal array with optimal encoding (RLE > Dictionary > Primitive)");
         sb.AppendLine($"{indent}{{");
-        sb.AppendLine($"{indent}    var array{index} = global::ArrowCollection.DictionaryArrayBuilder.BuildDecimalArray(values{index}, {stats}, allocator);");
+        sb.AppendLine($"{indent}    var array{index} = global::ArrowCollection.RunLengthEncodedArrayBuilder.BuildDecimalArray(values{index}, {stats}, allocator);");
         sb.AppendLine($"{indent}    arrays.Add(array{index});");
         sb.AppendLine($"{indent}    schemaFields.Add(new Field(\"{field.MemberName}\", array{index}.Data.DataType, {nullable}));");
         sb.AppendLine($"{indent}}}");
