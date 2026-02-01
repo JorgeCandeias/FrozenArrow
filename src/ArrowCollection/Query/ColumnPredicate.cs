@@ -34,6 +34,40 @@ public abstract class ColumnPredicate
     {
         Evaluate(batch, selection.AsSpan());
     }
+
+    /// <summary>
+    /// Evaluates this predicate against the column, updating the compact selection bitmap.
+    /// </summary>
+    /// <param name="batch">The Arrow record batch.</param>
+    /// <param name="selection">The compact selection bitmap to update.</param>
+    public virtual void Evaluate(RecordBatch batch, ref SelectionBitmap selection)
+    {
+        // Default implementation: iterate and update bitmap
+        // Subclasses can override for better performance
+        var length = batch.Length;
+        var column = batch.Column(ColumnIndex);
+
+        for (int i = 0; i < length; i++)
+        {
+            if (!selection[i]) continue; // Already filtered out
+            
+            // Evaluate using single-item logic
+            if (!EvaluateSingle(column, i))
+            {
+                selection.Clear(i);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Evaluates this predicate for a single row.
+    /// Override in subclasses for optimized bitmap evaluation.
+    /// </summary>
+    protected virtual bool EvaluateSingle(IArrowArray column, int index)
+    {
+        // Default: not implemented, subclasses should override Evaluate(ref SelectionBitmap) instead
+        throw new NotImplementedException("Subclass must override either EvaluateSingle or Evaluate(ref SelectionBitmap)");
+    }
 }
 
 /// <summary>
@@ -93,6 +127,22 @@ public sealed class Int32ComparisonPredicate : ColumnPredicate
             };
         }
     }
+
+    protected override bool EvaluateSingle(IArrowArray column, int index)
+    {
+        if (column.IsNull(index)) return false;
+        var columnValue = RunLengthEncodedArrayBuilder.GetInt32Value(column, index);
+        return Operator switch
+        {
+            ComparisonOperator.Equal => columnValue == Value,
+            ComparisonOperator.NotEqual => columnValue != Value,
+            ComparisonOperator.LessThan => columnValue < Value,
+            ComparisonOperator.LessThanOrEqual => columnValue <= Value,
+            ComparisonOperator.GreaterThan => columnValue > Value,
+            ComparisonOperator.GreaterThanOrEqual => columnValue >= Value,
+            _ => false
+        };
+    }
 }
 
 /// <summary>
@@ -139,6 +189,22 @@ public sealed class DoubleComparisonPredicate : ColumnPredicate
             };
         }
     }
+
+    protected override bool EvaluateSingle(IArrowArray column, int index)
+    {
+        if (column.IsNull(index)) return false;
+        var columnValue = RunLengthEncodedArrayBuilder.GetDoubleValue(column, index);
+        return Operator switch
+        {
+            ComparisonOperator.Equal => columnValue == Value,
+            ComparisonOperator.NotEqual => columnValue != Value,
+            ComparisonOperator.LessThan => columnValue < Value,
+            ComparisonOperator.LessThanOrEqual => columnValue <= Value,
+            ComparisonOperator.GreaterThan => columnValue > Value,
+            ComparisonOperator.GreaterThanOrEqual => columnValue >= Value,
+            _ => false
+        };
+    }
 }
 
 /// <summary>
@@ -184,6 +250,22 @@ public sealed class DecimalComparisonPredicate : ColumnPredicate
                 _ => false
             };
         }
+    }
+
+    protected override bool EvaluateSingle(IArrowArray column, int index)
+    {
+        if (column.IsNull(index)) return false;
+        var columnValue = RunLengthEncodedArrayBuilder.GetDecimalValue(column, index);
+        return Operator switch
+        {
+            ComparisonOperator.Equal => columnValue == Value,
+            ComparisonOperator.NotEqual => columnValue != Value,
+            ComparisonOperator.LessThan => columnValue < Value,
+            ComparisonOperator.LessThanOrEqual => columnValue <= Value,
+            ComparisonOperator.GreaterThan => columnValue > Value,
+            ComparisonOperator.GreaterThanOrEqual => columnValue >= Value,
+            _ => false
+        };
     }
 }
 
@@ -234,6 +316,19 @@ public sealed class StringEqualityPredicate : ColumnPredicate
             selection[i] = Negate ? !matches : matches;
         }
     }
+
+    protected override bool EvaluateSingle(IArrowArray column, int index)
+    {
+        if (column.IsNull(index))
+        {
+            var result = Value is null;
+            return Negate ? !result : result;
+        }
+        if (Value is null) return Negate;
+        var columnValue = RunLengthEncodedArrayBuilder.GetStringValue(column, index);
+        var matches = string.Equals(columnValue, Value, Comparison);
+        return Negate ? !matches : matches;
+    }
 }
 
 /// <summary>
@@ -278,6 +373,19 @@ public sealed class StringOperationPredicate : ColumnPredicate
                 _ => false
             };
         }
+    }
+
+    protected override bool EvaluateSingle(IArrowArray column, int index)
+    {
+        if (column.IsNull(index)) return false;
+        var columnValue = RunLengthEncodedArrayBuilder.GetStringValue(column, index);
+        return Operation switch
+        {
+            StringOperation.Contains => columnValue.Contains(Pattern, Comparison),
+            StringOperation.StartsWith => columnValue.StartsWith(Pattern, Comparison),
+            StringOperation.EndsWith => columnValue.EndsWith(Pattern, Comparison),
+            _ => false
+        };
     }
 }
 
@@ -327,6 +435,13 @@ public sealed class BooleanPredicate : ColumnPredicate
             }
         }
     }
+
+    protected override bool EvaluateSingle(IArrowArray column, int index)
+    {
+        if (column is not Apache.Arrow.BooleanArray boolArray) return false;
+        if (boolArray.IsNull(index)) return false;
+        return boolArray.GetValue(index) == ExpectedValue;
+    }
 }
 
 /// <summary>
@@ -355,6 +470,12 @@ public sealed class IsNullPredicate : ColumnPredicate
             var isNull = column.IsNull(i);
             selection[i] = CheckForNull ? isNull : !isNull;
         }
+    }
+
+    protected override bool EvaluateSingle(IArrowArray column, int index)
+    {
+        var isNull = column.IsNull(index);
+        return CheckForNull ? isNull : !isNull;
     }
 }
 

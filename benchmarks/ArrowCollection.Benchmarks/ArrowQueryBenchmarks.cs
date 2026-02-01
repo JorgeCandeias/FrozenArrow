@@ -352,6 +352,130 @@ public class ArrowQueryBenchmarks
     }
 
     #endregion
+
+    #region Column-Level Aggregates (Phase 1)
+
+    /// <summary>
+    /// Sum with List - iterates all items.
+    /// </summary>
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Sum")]
+    public decimal List_Sum()
+    {
+        return _list.Where(x => x.IsActive).Sum(x => x.Salary);
+    }
+
+    /// <summary>
+    /// Sum with ArrowCollection Enumerable - materializes all items, then sums.
+    /// </summary>
+    [Benchmark]
+    [BenchmarkCategory("Sum")]
+    public decimal ArrowCollection_Enumerable_Sum()
+    {
+        return _arrowCollection.Where(x => x.IsActive).Sum(x => x.Salary);
+    }
+
+    /// <summary>
+    /// Sum with ArrowQuery - column-level aggregation, NO materialization!
+    /// </summary>
+    [Benchmark]
+    [BenchmarkCategory("Sum")]
+    public decimal ArrowQuery_Sum()
+    {
+        return _arrowCollection.AsQueryable().Where(x => x.IsActive).Sum(x => x.Salary);
+    }
+
+    /// <summary>
+    /// Average with List.
+    /// </summary>
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Average")]
+    public double List_Average()
+    {
+        return _list.Where(x => x.IsActive).Average(x => x.Age);
+    }
+
+    /// <summary>
+    /// Average with ArrowCollection Enumerable.
+    /// </summary>
+    [Benchmark]
+    [BenchmarkCategory("Average")]
+    public double ArrowCollection_Enumerable_Average()
+    {
+        return _arrowCollection.Where(x => x.IsActive).Average(x => x.Age);
+    }
+
+    /// <summary>
+    /// Average with ArrowQuery - column-level aggregation.
+    /// </summary>
+    [Benchmark]
+    [BenchmarkCategory("Average")]
+    public double ArrowQuery_Average()
+    {
+        return _arrowCollection.AsQueryable().Where(x => x.IsActive).Average(x => x.Age);
+    }
+
+    /// <summary>
+    /// Min with List.
+    /// </summary>
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Min")]
+    public decimal List_Min()
+    {
+        return _list.Where(x => x.Category == "Engineering").Min(x => x.Salary);
+    }
+
+    /// <summary>
+    /// Min with ArrowCollection Enumerable.
+    /// </summary>
+    [Benchmark]
+    [BenchmarkCategory("Min")]
+    public decimal ArrowCollection_Enumerable_Min()
+    {
+        return _arrowCollection.Where(x => x.Category == "Engineering").Min(x => x.Salary);
+    }
+
+    /// <summary>
+    /// Min with ArrowQuery - column-level aggregation.
+    /// </summary>
+    [Benchmark]
+    [BenchmarkCategory("Min")]
+    public decimal ArrowQuery_Min()
+    {
+        return _arrowCollection.AsQueryable().Where(x => x.Category == "Engineering").Min(x => x.Salary);
+    }
+
+    /// <summary>
+    /// Max with List.
+    /// </summary>
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Max")]
+    public decimal List_Max()
+    {
+        return _list.Where(x => x.Category == "Engineering").Max(x => x.Salary);
+    }
+
+    /// <summary>
+    /// Max with ArrowCollection Enumerable.
+    /// </summary>
+    [Benchmark]
+    [BenchmarkCategory("Max")]
+    public decimal ArrowCollection_Enumerable_Max()
+    {
+        return _arrowCollection.Where(x => x.Category == "Engineering").Max(x => x.Salary);
+    }
+
+    /// <summary>
+    /// Max with ArrowQuery - column-level aggregation.
+    /// </summary>
+    [Benchmark]
+    [BenchmarkCategory("Max")]
+    public decimal ArrowQuery_Max()
+    {
+        return _arrowCollection.AsQueryable().Where(x => x.Category == "Engineering").Max(x => x.Salary);
+    }
+
+    #endregion
 }
 
 /// <summary>

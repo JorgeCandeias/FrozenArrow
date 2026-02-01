@@ -193,6 +193,7 @@ public sealed class ArrowQueryProvider : IQueryProvider
         return ExecutePlan<TResult>(plan, expression);
     }
 
+
     internal QueryPlan AnalyzeExpression(Expression expression)
     {
         var analyzer = new QueryExpressionAnalyzer(_columnIndexMap);
@@ -201,21 +202,22 @@ public sealed class ArrowQueryProvider : IQueryProvider
 
     private TResult ExecutePlan<TResult>(QueryPlan plan, Expression expression)
     {
-        // Build selection bitmap
-        var selection = new bool[_count];
-        System.Array.Fill(selection, true);
+        // Build selection bitmap using pooled bitfield (8x more memory efficient)
+        using var selection = SelectionBitmap.Create(_count, initialValue: true);
 
         // Apply column predicates
         foreach (var predicate in plan.ColumnPredicates)
         {
-            predicate.Evaluate(_recordBatch, selection);
+            predicate.Evaluate(_recordBatch, ref System.Runtime.CompilerServices.Unsafe.AsRef(in selection));
         }
 
-        // Count selected rows
-        var selectedCount = 0;
-        for (int i = 0; i < _count; i++)
+        // Count selected rows using hardware popcount
+        var selectedCount = selection.CountSet();
+
+        // Handle simple aggregates (Sum, Average, Min, Max) directly on columns
+        if (plan.SimpleAggregate is not null)
         {
-            if (selection[i]) selectedCount++;
+            return ExecuteSimpleAggregate<TResult>(plan.SimpleAggregate, ref System.Runtime.CompilerServices.Unsafe.AsRef(in selection));
         }
 
         // Handle different result types
@@ -226,19 +228,22 @@ public sealed class ArrowQueryProvider : IQueryProvider
             (resultType.GetGenericTypeDefinition() == typeof(IEnumerable<>) ||
              resultType.GetGenericTypeDefinition() == typeof(IQueryable<>)))
         {
-            var enumerable = EnumerateSelected(selection);
+            // For enumeration, we need to copy the selected indices since the bitmap will be disposed
+            var selectedIndices = new List<int>(selectedCount);
+            foreach (var idx in selection.GetSelectedIndices())
+            {
+                selectedIndices.Add(idx);
+            }
+            var enumerable = EnumerateSelectedIndices(selectedIndices);
             return (TResult)enumerable;
         }
 
         // Single element results (First, Single, etc.)
         if (resultType == _elementType)
         {
-            for (int i = 0; i < _count; i++)
+            foreach (var i in selection.GetSelectedIndices())
             {
-                if (selection[i])
-                {
-                    return (TResult)_createItem(_recordBatch, i);
-                }
+                return (TResult)_createItem(_recordBatch, i);
             }
             throw new InvalidOperationException("Sequence contains no elements.");
         }
@@ -275,24 +280,43 @@ public sealed class ArrowQueryProvider : IQueryProvider
         throw new NotSupportedException($"Result type '{resultType}' is not supported.");
     }
 
-    private IEnumerable<T> EnumerateSelectedCore<T>(bool[] selection)
+    private TResult ExecuteSimpleAggregate<TResult>(SimpleAggregateOperation aggregate, ref SelectionBitmap selection)
     {
-        for (int i = 0; i < _count; i++)
+        // Find the column by name
+        var columnIndex = _columnIndexMap.TryGetValue(aggregate.ColumnName!, out var idx) 
+            ? idx 
+            : throw new InvalidOperationException($"Column '{aggregate.ColumnName}' not found.");
+        
+        var column = _recordBatch.Column(columnIndex);
+
+        var result = aggregate.Operation switch
         {
-            if (selection[i])
-            {
-                yield return (T)_createItem(_recordBatch, i);
-            }
+            AggregationOperation.Sum => ColumnAggregator.ExecuteSum(column, ref selection, aggregate.ResultType),
+            AggregationOperation.Average => ColumnAggregator.ExecuteAverage(column, ref selection, aggregate.ResultType),
+            AggregationOperation.Min => ColumnAggregator.ExecuteMin(column, ref selection, aggregate.ResultType),
+            AggregationOperation.Max => ColumnAggregator.ExecuteMax(column, ref selection, aggregate.ResultType),
+            _ => throw new NotSupportedException($"Aggregate operation {aggregate.Operation} is not supported.")
+        };
+
+        return (TResult)result;
+    }
+
+    private IEnumerable<T> EnumerateSelectedIndicesCore<T>(List<int> selectedIndices)
+    {
+        foreach (var i in selectedIndices)
+        {
+            yield return (T)_createItem(_recordBatch, i);
         }
     }
 
-    private object EnumerateSelected(bool[] selection)
+    private object EnumerateSelectedIndices(List<int> selectedIndices)
     {
         var method = typeof(ArrowQueryProvider)
-            .GetMethod(nameof(EnumerateSelectedCore), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetMethod(nameof(EnumerateSelectedIndicesCore), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
             .MakeGenericMethod(_elementType);
-        return method.Invoke(this, [selection])!;
+        return method.Invoke(this, [selectedIndices])!;
     }
+
 
     private static Type? GetElementType(Type type)
     {
@@ -320,12 +344,19 @@ internal sealed class QueryExpressionAnalyzer(Dictionary<string, int> columnInde
     private readonly HashSet<string> _columnsAccessed = [];
     private readonly List<string> _unsupportedReasons = [];
     private bool _hasUnsupportedPatterns;
+    private SimpleAggregateOperation? _simpleAggregate;
 
     private static readonly HashSet<string> SupportedMethods =
     [
         "Where", "Select", "First", "FirstOrDefault", "Single", "SingleOrDefault",
         "Any", "All", "Count", "LongCount", "Take", "Skip", "ToList", "ToArray",
-        "OrderBy", "OrderByDescending", "ThenBy", "ThenByDescending"
+        "OrderBy", "OrderByDescending", "ThenBy", "ThenByDescending",
+        "Sum", "Average", "Min", "Max"
+    ];
+
+    private static readonly HashSet<string> AggregateMethods =
+    [
+        "Sum", "Average", "Min", "Max"
     ];
 
     public QueryPlan Analyze(Expression expression)
@@ -340,7 +371,8 @@ internal sealed class QueryExpressionAnalyzer(Dictionary<string, int> columnInde
                 : null,
             ColumnsAccessed = [.. _columnsAccessed],
             ColumnPredicates = _predicates,
-            HasFallbackPredicate = false, // TODO: implement fallback
+            HasFallbackPredicate = false,
+            SimpleAggregate = _simpleAggregate,
             EstimatedSelectivity = EstimateSelectivity()
         };
     }
@@ -381,6 +413,12 @@ internal sealed class QueryExpressionAnalyzer(Dictionary<string, int> columnInde
                     AnalyzeWherePredicate(lambda);
                 }
             }
+
+            // Process aggregate methods (Sum, Average, Min, Max)
+            if (AggregateMethods.Contains(methodName))
+            {
+                AnalyzeAggregateMethod(node, methodName);
+            }
         }
 
         return base.VisitMethodCall(node);
@@ -407,6 +445,83 @@ internal sealed class QueryExpressionAnalyzer(Dictionary<string, int> columnInde
             _hasUnsupportedPatterns = true;
             _unsupportedReasons.AddRange(result.UnsupportedReasons);
         }
+    }
+
+    private void AnalyzeAggregateMethod(MethodCallExpression node, string methodName)
+    {
+        var operation = methodName switch
+        {
+            "Sum" => AggregationOperation.Sum,
+            "Average" => AggregationOperation.Average,
+            "Min" => AggregationOperation.Min,
+            "Max" => AggregationOperation.Max,
+            _ => throw new NotSupportedException($"Unknown aggregate method: {methodName}")
+        };
+
+        // Extract the column name from the selector lambda
+        string? columnName = null;
+        
+        // The selector is the second argument (first is the source)
+        if (node.Arguments.Count >= 2)
+        {
+            var selectorArg = node.Arguments[1];
+            if (selectorArg is UnaryExpression unary && unary.Operand is LambdaExpression lambda)
+            {
+                columnName = ExtractColumnNameFromSelector(lambda);
+            }
+        }
+
+        if (columnName is not null)
+        {
+            _columnsAccessed.Add(columnName);
+            _simpleAggregate = new SimpleAggregateOperation
+            {
+                Operation = operation,
+                ColumnName = columnName,
+                ResultType = node.Method.ReturnType
+            };
+        }
+        else
+        {
+            _hasUnsupportedPatterns = true;
+            _unsupportedReasons.Add($"Could not extract column name from {methodName} selector. " +
+                "Only simple property access like x => x.Salary is supported.");
+        }
+    }
+
+    private string? ExtractColumnNameFromSelector(LambdaExpression lambda)
+    {
+        // Handle simple property access: x => x.Property
+        if (lambda.Body is MemberExpression memberExpr)
+        {
+            // Check if the member is accessed from the parameter
+            if (memberExpr.Expression is ParameterExpression)
+            {
+                var memberName = memberExpr.Member.Name;
+                
+                // Look up the column name in the map (it might be aliased via ArrowArray attribute)
+                // First try direct match, then try finding by property name
+                if (columnIndexMap.ContainsKey(memberName))
+                {
+                    return memberName;
+                }
+                
+                // The column might be named differently - search for it
+                // For now, just return the member name and let execution handle it
+                return memberName;
+            }
+        }
+        
+        // Handle unary conversion: x => (double)x.Property
+        if (lambda.Body is UnaryExpression unaryExpr && unaryExpr.Operand is MemberExpression innerMember)
+        {
+            if (innerMember.Expression is ParameterExpression)
+            {
+                return innerMember.Member.Name;
+            }
+        }
+
+        return null;
     }
 
     private double EstimateSelectivity()

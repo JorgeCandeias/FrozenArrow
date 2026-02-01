@@ -41,6 +41,11 @@ public sealed class QueryPlan
     public string? GroupByColumn { get; init; }
 
     /// <summary>
+    /// Gets the simple aggregate operation (for non-grouped aggregates like Sum, Average, Min, Max).
+    /// </summary>
+    public SimpleAggregateOperation? SimpleAggregate { get; init; }
+
+    /// <summary>
     /// Gets the estimated selectivity of the filter (0.0 to 1.0).
     /// This is an estimate of what fraction of rows will pass the filter.
     /// </summary>
@@ -86,6 +91,12 @@ public sealed class QueryPlan
             lines.Add($"  Aggregations: {string.Join(", ", Aggregations.Select(a => $"{a.Operation}({a.ColumnName})"))}");
         }
 
+        if (SimpleAggregate is not null)
+        {
+            var colDisplay = SimpleAggregate.ColumnName ?? "";
+            lines.Add($"  Aggregate: {SimpleAggregate.Operation}({colDisplay}) [Column-Level]");
+        }
+
         lines.Add($"  Est. Selectivity: {EstimatedSelectivity:P0}");
 
         return string.Join(Environment.NewLine, lines);
@@ -124,4 +135,25 @@ public enum AggregationOperation
     Min,
     Max,
     LongCount
+}
+
+/// <summary>
+/// Describes a simple (non-grouped) aggregate operation.
+/// </summary>
+public sealed class SimpleAggregateOperation
+{
+    /// <summary>
+    /// Gets the aggregation operation type.
+    /// </summary>
+    public required AggregationOperation Operation { get; init; }
+
+    /// <summary>
+    /// Gets the column name to aggregate (null for Count without selector).
+    /// </summary>
+    public string? ColumnName { get; init; }
+
+    /// <summary>
+    /// Gets the expected result type.
+    /// </summary>
+    public required Type ResultType { get; init; }
 }
