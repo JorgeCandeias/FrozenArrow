@@ -1,6 +1,7 @@
-using ArrowCollection.Query;
+﻿using ArrowCollection.Query;
 using System.Collections.Immutable;
 using System.Collections.Frozen;
+using System.Diagnostics.CodeAnalysis;
 
 namespace ArrowCollection.Tests;
 
@@ -193,6 +194,7 @@ public class ArrowQueryTests
     }
 
     [Fact]
+    [SuppressMessage("Performance", "CA1847:Use char literal for a single character lookup", Justification = "Needed for the test")]
     public void Where_StringContains_FiltersCorrectly()
     {
         // Arrange
@@ -210,6 +212,24 @@ public class ArrowQueryTests
     }
 
     [Fact]
+    public void Where_StringContainsChar_FiltersCorrectly()
+    {
+        // Arrange
+        var collection = CreateTestCollection();
+
+        // Act - Using char overload instead of string
+        var results = collection
+            .AsQueryable()
+            .Where(x => x.Name.Contains('a'))
+            .ToList();
+
+        // Assert
+        // Diana, Grace, Frank, Jack, Charlie = 5 (case-sensitive, no 'A'lice)
+        Assert.Equal(5, results.Count);
+    }
+
+    [Fact]
+    [SuppressMessage("Performance", "CA1866:Use char overload", Justification = "Needed for the test")]
     public void Where_StringStartsWith_FiltersCorrectly()
     {
         // Arrange
@@ -508,7 +528,7 @@ public class ArrowQueryTests
             .Average(x => x.Age);
 
         // Assert
-        // Active ages: 25, 35, 28, 32, 29, 55, 23 = 227 / 7 ? 32.43
+        // Active ages: 25, 35, 28, 32, 29, 55, 23 = 227 / 7 ≈ 32.43
         Assert.Equal(227.0 / 7.0, avgAge, precision: 2);
     }
 
@@ -525,7 +545,7 @@ public class ArrowQueryTests
             .Min(x => x.Salary);
 
         // Assert
-        // Engineering salaries: 50000, 75000, 55000, 45000, 70000 ? min = 45000 (Ivy)
+        // Engineering salaries: 50000, 75000, 55000, 45000, 70000 → min = 45000 (Ivy)
         Assert.Equal(45000m, minSalary);
     }
 
@@ -542,7 +562,7 @@ public class ArrowQueryTests
             .Max(x => x.Salary);
 
         // Assert
-        // Engineering salaries: 50000, 75000, 55000, 45000, 70000 ? max = 75000 (Bob)
+        // Engineering salaries: 50000, 75000, 55000, 45000, 70000 → max = 75000 (Bob)
         Assert.Equal(75000m, maxSalary);
     }
 
@@ -559,7 +579,7 @@ public class ArrowQueryTests
             .Min(x => x.Age);
 
         // Assert
-        // Inactive: Charlie(45), Frank(40), Jack(38) ? min = 38
+        // Inactive: Charlie(45), Frank(40), Jack(38) → min = 38
         Assert.Equal(38, minAge);
     }
 
@@ -599,6 +619,172 @@ public class ArrowQueryTests
 
         // Assert
         Assert.Contains("Optimized: True", queryPlan);
+    }
+
+    #endregion
+
+    #region GroupBy Tests (Phase 2)
+
+    /// <summary>
+    /// Result type for GroupBy tests.
+    /// </summary>
+    public class CategorySummary
+    {
+        public string Key { get; set; } = string.Empty;
+        public int Count { get; set; }
+        public decimal TotalSalary { get; set; }
+        public double AverageAge { get; set; }
+    }
+
+    [Fact]
+    public void GroupBy_WithCount_GroupsByKeyAndCountsPerGroup()
+    {
+        // Arrange
+        using var collection = CreateTestCollection();
+
+        // Act - Group by Category, count per group
+        var results = collection
+            .AsQueryable()
+            .GroupBy(x => x.Category)
+            .Select(g => new CategorySummary { Key = g.Key, Count = g.Count() })
+            .ToList();
+
+        // Assert
+        Assert.Equal(4, results.Count); // Engineering, Management, Marketing, Executive
+        
+        var engineering = results.First(r => r.Key == "Engineering");
+        Assert.Equal(5, engineering.Count); // Alice, Bob, Diana, Ivy, Jack
+
+        var management = results.First(r => r.Key == "Management");
+        Assert.Equal(2, management.Count); // Charlie, Frank
+
+        var marketing = results.First(r => r.Key == "Marketing");
+        Assert.Equal(2, marketing.Count); // Eve, Grace
+
+        var executive = results.First(r => r.Key == "Executive");
+        Assert.Equal(1, executive.Count); // Henry
+    }
+
+    [Fact]
+    public void GroupBy_WithSum_ComputesSumPerGroup()
+    {
+        // Arrange
+        using var collection = CreateTestCollection();
+
+        // Act - Group by Category, sum salaries per group
+        var results = collection
+            .AsQueryable()
+            .GroupBy(x => x.Category)
+            .Select(g => new CategorySummary { Key = g.Key, TotalSalary = g.Sum(x => x.Salary) })
+            .ToList();
+
+        // Assert
+        var engineering = results.First(r => r.Key == "Engineering");
+        // Engineering: 50000 + 75000 + 55000 + 45000 + 70000 = 295000
+        Assert.Equal(295000m, engineering.TotalSalary);
+
+        var management = results.First(r => r.Key == "Management");
+        // Management: 90000 + 80000 = 170000
+        Assert.Equal(170000m, management.TotalSalary);
+    }
+
+    [Fact]
+    public void GroupBy_WithAverage_ComputesAveragePerGroup()
+    {
+        // Arrange
+        using var collection = CreateTestCollection();
+
+        // Act - Group by Category, average age per group
+        var results = collection
+            .AsQueryable()
+            .GroupBy(x => x.Category)
+            .Select(g => new CategorySummary { Key = g.Key, AverageAge = g.Average(x => x.Age) })
+            .ToList();
+
+        // Assert
+        var engineering = results.First(r => r.Key == "Engineering");
+        // Engineering ages: 25, 35, 28, 23, 38 = 149 / 5 = 29.8
+        Assert.Equal(29.8, engineering.AverageAge, precision: 1);
+
+        var executive = results.First(r => r.Key == "Executive");
+        // Executive: just Henry (55)
+        Assert.Equal(55.0, executive.AverageAge);
+    }
+
+    [Fact]
+    public void GroupBy_WithFilter_FiltersBeforeGrouping()
+    {
+        // Arrange
+        using var collection = CreateTestCollection();
+
+        // Act - Filter active only, then group and count
+        var results = collection
+            .AsQueryable()
+            .Where(x => x.IsActive)
+            .GroupBy(x => x.Category)
+            .Select(g => new CategorySummary { Key = g.Key, Count = g.Count() })
+            .ToList();
+
+        // Assert
+        // Active employees:
+        // Engineering: Alice, Bob, Diana, Ivy (4) - Jack is inactive
+        // Management: none (Charlie, Frank are inactive)
+        // Marketing: Eve, Grace (2)
+        // Executive: Henry (1)
+
+        Assert.Equal(3, results.Count); // No Management group (all inactive)
+
+        var engineering = results.First(r => r.Key == "Engineering");
+        Assert.Equal(4, engineering.Count);
+
+        var marketing = results.First(r => r.Key == "Marketing");
+        Assert.Equal(2, marketing.Count);
+
+        Assert.DoesNotContain(results, r => r.Key == "Management");
+    }
+
+    [Fact]
+    public void GroupBy_WithMultipleAggregates_ComputesAllAggregates()
+    {
+        // Arrange
+        using var collection = CreateTestCollection();
+
+        // Act - Group with multiple aggregates
+        var results = collection
+            .AsQueryable()
+            .GroupBy(x => x.Category)
+            .Select(g => new CategorySummary 
+            { 
+                Key = g.Key, 
+                Count = g.Count(),
+                TotalSalary = g.Sum(x => x.Salary),
+                AverageAge = g.Average(x => x.Age)
+            })
+            .ToList();
+
+        // Assert
+        var engineering = results.First(r => r.Key == "Engineering");
+        Assert.Equal(5, engineering.Count);
+        Assert.Equal(295000m, engineering.TotalSalary);
+        Assert.Equal(29.8, engineering.AverageAge, precision: 1);
+    }
+
+    [Fact]
+    public void GroupBy_Explain_ShowsGroupByInPlan()
+    {
+        // Arrange
+        using var collection = CreateTestCollection();
+
+        // Act - Create query but don't execute
+        var query = collection
+            .AsQueryable()
+            .Where(x => x.IsActive);
+        
+        var plan = query.Explain();
+
+        // Assert
+        Assert.Contains("Optimized: True", plan);
+        Assert.Contains("IsActive", plan);
     }
 
     #endregion

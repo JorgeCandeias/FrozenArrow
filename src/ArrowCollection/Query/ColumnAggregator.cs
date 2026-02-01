@@ -72,7 +72,7 @@ internal static class ColumnAggregator
         {
             if (selection[i] && !array.IsNull(i))
             {
-                sum += (decimal)array.GetSqlDecimal(i);
+                sum += array.GetValue(i)!.Value;
             }
         }
         return sum;
@@ -154,7 +154,7 @@ internal static class ColumnAggregator
         {
             if (selection[i] && !array.IsNull(i))
             {
-                sum += (decimal)array.GetSqlDecimal(i);
+                sum += array.GetValue(i)!.Value;
                 count++;
             }
         }
@@ -236,7 +236,7 @@ internal static class ColumnAggregator
         {
             if (selection[i] && !array.IsNull(i))
             {
-                var value = (decimal)array.GetSqlDecimal(i);
+                var value = array.GetValue(i)!.Value;
                 if (!hasValue || value < min)
                 {
                     min = value;
@@ -343,7 +343,7 @@ internal static class ColumnAggregator
         {
             if (selection[i] && !array.IsNull(i))
             {
-                var value = (decimal)array.GetSqlDecimal(i);
+                var value = array.GetValue(i)!.Value;
                 if (!hasValue || value > max)
                 {
                     max = value;
@@ -576,7 +576,7 @@ internal static class ColumnAggregator
         foreach (var i in selection.GetSelectedIndices())
         {
             if (!array.IsNull(i))
-                sum += (decimal)array.GetSqlDecimal(i);
+                sum += array.GetValue(i)!.Value;
         }
         return sum;
     }
@@ -653,7 +653,7 @@ internal static class ColumnAggregator
         {
             if (!array.IsNull(i))
             {
-                sum += (decimal)array.GetSqlDecimal(i);
+                sum += array.GetValue(i)!.Value;
                 count++;
             }
         }
@@ -731,7 +731,7 @@ internal static class ColumnAggregator
         {
             if (!array.IsNull(i))
             {
-                var value = (decimal)array.GetSqlDecimal(i);
+                var value = array.GetValue(i)!.Value;
                 if (!hasValue || value < min)
                 {
                     min = value;
@@ -834,7 +834,7 @@ internal static class ColumnAggregator
         {
             if (!array.IsNull(i))
             {
-                var value = (decimal)array.GetSqlDecimal(i);
+                var value = array.GetValue(i)!.Value;
                 if (!hasValue || value > max)
                 {
                     max = value;

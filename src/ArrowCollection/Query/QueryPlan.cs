@@ -18,12 +18,12 @@ public sealed class QueryPlan
     /// <summary>
     /// Gets the list of columns that will be accessed during query execution.
     /// </summary>
-    public IReadOnlyList<string> ColumnsAccessed { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> ColumnsAccessed { get; init; } = [];
 
     /// <summary>
     /// Gets the column predicates that can be pushed down to column-level filtering.
     /// </summary>
-    public IReadOnlyList<ColumnPredicate> ColumnPredicates { get; init; } = Array.Empty<ColumnPredicate>();
+    public IReadOnlyList<ColumnPredicate> ColumnPredicates { get; init; } = [];
 
     /// <summary>
     /// Gets whether there is a fallback predicate that requires row materialization.
@@ -33,12 +33,22 @@ public sealed class QueryPlan
     /// <summary>
     /// Gets the aggregations to perform (for GroupBy queries).
     /// </summary>
-    public IReadOnlyList<AggregationDescriptor> Aggregations { get; init; } = Array.Empty<AggregationDescriptor>();
+    public IReadOnlyList<AggregationDescriptor> Aggregations { get; init; } = [];
 
     /// <summary>
     /// Gets the grouping key column name (for GroupBy queries).
     /// </summary>
     public string? GroupByColumn { get; init; }
+
+    /// <summary>
+    /// Gets the CLR type of the group key (for GroupBy queries).
+    /// </summary>
+    public Type? GroupByKeyType { get; init; }
+
+    /// <summary>
+    /// Gets whether this is a grouped query (GroupBy followed by Select with aggregates).
+    /// </summary>
+    public bool IsGroupedQuery => GroupByColumn is not null && Aggregations.Count > 0;
 
     /// <summary>
     /// Gets the simple aggregate operation (for non-grouped aggregates like Sum, Average, Min, Max).

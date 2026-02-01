@@ -28,6 +28,7 @@ public sealed class ArrowQuery<T> : IQueryable<T>, IOrderedQueryable<T>
         _expression = Expression.Constant(this);
     }
 
+
     /// <summary>
     /// Creates a new ArrowQuery with an existing provider and expression.
     /// </summary>
@@ -35,13 +36,14 @@ public sealed class ArrowQuery<T> : IQueryable<T>, IOrderedQueryable<T>
     {
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
         _expression = expression ?? throw new ArgumentNullException(nameof(expression));
-        Source = provider.GetSource<T>();
+        // Source is only valid for the original element type, not intermediate types like IGrouping
+        Source = null!;
     }
 
     /// <summary>
-    /// Gets the underlying ArrowCollection source.
+    /// Gets the underlying ArrowCollection source (only valid for the original element type).
     /// </summary>
-    public ArrowCollection<T> Source { get; }
+    public ArrowCollection<T>? Source { get; }
 
     /// <summary>
     /// Gets the type of the elements in the query.
@@ -214,6 +216,12 @@ public sealed class ArrowQueryProvider : IQueryProvider
         // Count selected rows using hardware popcount
         var selectedCount = selection.CountSet();
 
+        // Handle grouped queries (GroupBy + Select with aggregates)
+        if (plan.IsGroupedQuery)
+        {
+            return ExecuteGroupedQuery<TResult>(plan, ref System.Runtime.CompilerServices.Unsafe.AsRef(in selection));
+        }
+
         // Handle simple aggregates (Sum, Average, Min, Max) directly on columns
         if (plan.SimpleAggregate is not null)
         {
@@ -301,6 +309,111 @@ public sealed class ArrowQueryProvider : IQueryProvider
         return (TResult)result;
     }
 
+    private TResult ExecuteGroupedQuery<TResult>(QueryPlan plan, ref SelectionBitmap selection)
+    {
+        // Get the key column
+        var keyColumnIndex = _columnIndexMap.TryGetValue(plan.GroupByColumn!, out var idx)
+            ? idx
+            : throw new InvalidOperationException($"Group key column '{plan.GroupByColumn}' not found.");
+        
+        var keyColumn = _recordBatch.Column(keyColumnIndex);
+
+        // Execute the grouped query using reflection to handle the key type
+        var method = typeof(ArrowQueryProvider)
+            .GetMethod(nameof(ExecuteGroupedQueryTyped), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .MakeGenericMethod(plan.GroupByKeyType!, typeof(TResult));
+
+        return (TResult)method.Invoke(this, [plan, keyColumn, selection])!;
+    }
+
+    private TResult ExecuteGroupedQueryTyped<TKey, TResult>(QueryPlan plan, IArrowArray keyColumn, SelectionBitmap selection) 
+        where TKey : notnull
+    {
+        // Execute grouped aggregation
+        var groupedResults = GroupedColumnAggregator.ExecuteGroupedQuery<TKey>(
+            keyColumn,
+            _recordBatch,
+            ref selection,
+            plan.Aggregations,
+            _columnIndexMap);
+
+        // Build result objects
+        // TResult should be IEnumerable<SomeProjectionType>
+        var resultType = typeof(TResult);
+        
+        if (resultType.IsGenericType && 
+            (resultType.GetGenericTypeDefinition() == typeof(IEnumerable<>) ||
+             resultType.GetGenericTypeDefinition() == typeof(IQueryable<>)))
+        {
+            var elementType = resultType.GetGenericArguments()[0];
+            var results = CreateGroupedResultObjects<TKey>(groupedResults, elementType);
+            return (TResult)results;
+        }
+
+        throw new NotSupportedException($"GroupBy result type '{resultType}' is not supported. Use .ToList() or enumerate the results.");
+    }
+
+    private static object CreateGroupedResultObjects<TKey>(
+        List<GroupedResult<TKey>> groupedResults,
+        Type elementType) where TKey : notnull
+    {
+        // Create a list of the result type
+        var listType = typeof(List<>).MakeGenericType(elementType);
+        var list = (System.Collections.IList)Activator.CreateInstance(listType, groupedResults.Count)!;
+
+        // Check if it's an anonymous type (has constructor parameters matching properties)
+        var constructor = elementType.GetConstructors().FirstOrDefault();
+        var properties = elementType.GetProperties();
+
+        foreach (var group in groupedResults)
+        {
+            object resultItem;
+
+            if (constructor is not null && constructor.GetParameters().Length > 0)
+            {
+                // Anonymous type - use constructor
+                var ctorParams = constructor.GetParameters();
+                var args = new object?[ctorParams.Length];
+
+                for (int i = 0; i < ctorParams.Length; i++)
+                {
+                    var paramName = ctorParams[i].Name!;
+                    if (paramName.Equals("Key", StringComparison.OrdinalIgnoreCase))
+                    {
+                        args[i] = group.Key;
+                    }
+                    else if (group.AggregateValues.TryGetValue(paramName, out var value))
+                    {
+                        args[i] = Convert.ChangeType(value, ctorParams[i].ParameterType);
+                    }
+                }
+
+                resultItem = constructor.Invoke(args);
+            }
+            else
+            {
+                // Regular type with property setters
+                resultItem = Activator.CreateInstance(elementType)!;
+
+                foreach (var prop in properties)
+                {
+                    if (prop.Name.Equals("Key", StringComparison.OrdinalIgnoreCase) && prop.CanWrite)
+                    {
+                        prop.SetValue(resultItem, group.Key);
+                    }
+                    else if (group.AggregateValues.TryGetValue(prop.Name, out var value) && prop.CanWrite)
+                    {
+                        prop.SetValue(resultItem, Convert.ChangeType(value, prop.PropertyType));
+                    }
+                }
+            }
+
+            list.Add(resultItem);
+        }
+
+        return list;
+    }
+
     private IEnumerable<T> EnumerateSelectedIndicesCore<T>(List<int> selectedIndices)
     {
         foreach (var i in selectedIndices)
@@ -351,13 +464,18 @@ internal sealed class QueryExpressionAnalyzer(Dictionary<string, int> columnInde
         "Where", "Select", "First", "FirstOrDefault", "Single", "SingleOrDefault",
         "Any", "All", "Count", "LongCount", "Take", "Skip", "ToList", "ToArray",
         "OrderBy", "OrderByDescending", "ThenBy", "ThenByDescending",
-        "Sum", "Average", "Min", "Max"
+        "Sum", "Average", "Min", "Max", "GroupBy"
     ];
 
     private static readonly HashSet<string> AggregateMethods =
     [
         "Sum", "Average", "Min", "Max"
     ];
+
+    private string? _groupByColumn;
+    private Type? _groupByKeyType;
+    private readonly List<AggregationDescriptor> _aggregations = [];
+    private bool _insideGroupByProjection; // Flag to allow Enumerable methods inside GroupBy projection
 
     public QueryPlan Analyze(Expression expression)
     {
@@ -373,6 +491,9 @@ internal sealed class QueryExpressionAnalyzer(Dictionary<string, int> columnInde
             ColumnPredicates = _predicates,
             HasFallbackPredicate = false,
             SimpleAggregate = _simpleAggregate,
+            GroupByColumn = _groupByColumn,
+            GroupByKeyType = _groupByKeyType,
+            Aggregations = _aggregations,
             EstimatedSelectivity = EstimateSelectivity()
         };
     }
@@ -382,8 +503,8 @@ internal sealed class QueryExpressionAnalyzer(Dictionary<string, int> columnInde
         var methodName = node.Method.Name;
         var declaringType = node.Method.DeclaringType?.FullName ?? "";
 
-        // Check for Enumerable methods (should use Queryable)
-        if (declaringType == "System.Linq.Enumerable")
+        // Allow Enumerable methods inside GroupBy projection (g.Count(), g.Sum(), etc.)
+        if (declaringType == "System.Linq.Enumerable" && !_insideGroupByProjection)
         {
             _hasUnsupportedPatterns = true;
             _unsupportedReasons.Add(
@@ -414,14 +535,68 @@ internal sealed class QueryExpressionAnalyzer(Dictionary<string, int> columnInde
                 }
             }
 
-            // Process aggregate methods (Sum, Average, Min, Max)
-            if (AggregateMethods.Contains(methodName))
+            // Check if this Select follows a GroupBy (for grouped aggregation)
+            if (methodName == "Select" && node.Arguments.Count >= 2)
+            {
+                // Check if the source is a GroupBy call
+                var source = node.Arguments[0];
+                if (IsGroupByCall(source))
+                {
+                    // First analyze the GroupBy (if not already done)
+                    if (_groupByColumn is null)
+                    {
+                        AnalyzeGroupByFromSource(source);
+                    }
+                    // Then analyze the projection
+                    AnalyzeGroupByProjection(node);
+                    // Visit only the underlying source (skip GroupBy + Select lambdas)
+                    VisitUnderlyingSource(source);
+                    return node; // Don't call base.VisitMethodCall
+                }
+            }
+
+            // Process GroupBy (when not followed by Select - rare)
+            if (methodName == "GroupBy" && node.Arguments.Count >= 2)
+            {
+                AnalyzeGroupBy(node);
+            }
+
+            // Process aggregate methods (Sum, Average, Min, Max) - only for non-grouped queries
+            if (AggregateMethods.Contains(methodName) && _groupByColumn is null)
             {
                 AnalyzeAggregateMethod(node, methodName);
             }
         }
 
         return base.VisitMethodCall(node);
+    }
+
+    private static bool IsGroupByCall(Expression expression)
+    {
+        if (expression is MethodCallExpression methodCall)
+        {
+            return methodCall.Method.Name == "GroupBy" && 
+                   methodCall.Method.DeclaringType?.FullName == "System.Linq.Queryable";
+        }
+        return false;
+    }
+
+    private void AnalyzeGroupByFromSource(Expression source)
+    {
+        if (source is MethodCallExpression groupByCall)
+        {
+            AnalyzeGroupBy(groupByCall);
+        }
+    }
+
+    private void VisitUnderlyingSource(Expression source)
+    {
+        // source is GroupBy(innerSource, keySelector)
+        // We want to visit innerSource
+        if (source is MethodCallExpression groupByCall && groupByCall.Arguments.Count > 0)
+        {
+            Visit(groupByCall.Arguments[0]); // Visit the source of GroupBy
+        }
     }
 
     private void AnalyzeWherePredicate(LambdaExpression lambda)
@@ -489,6 +664,7 @@ internal sealed class QueryExpressionAnalyzer(Dictionary<string, int> columnInde
         }
     }
 
+
     private string? ExtractColumnNameFromSelector(LambdaExpression lambda)
     {
         // Handle simple property access: x => x.Property
@@ -522,6 +698,185 @@ internal sealed class QueryExpressionAnalyzer(Dictionary<string, int> columnInde
         }
 
         return null;
+    }
+
+    private void AnalyzeGroupBy(MethodCallExpression node)
+    {
+        // Extract key selector: GroupBy(x => x.Category)
+        var keySelectorArg = node.Arguments[1];
+        if (keySelectorArg is UnaryExpression unary && unary.Operand is LambdaExpression lambda)
+        {
+            var columnName = ExtractColumnNameFromSelector(lambda);
+            if (columnName is not null)
+            {
+                _groupByColumn = columnName;
+                _groupByKeyType = lambda.ReturnType;
+                _columnsAccessed.Add(columnName);
+            }
+            else
+            {
+                _hasUnsupportedPatterns = true;
+                _unsupportedReasons.Add("GroupBy key selector must be a simple property access (x => x.Property).");
+            }
+        }
+    }
+
+    private void AnalyzeGroupByProjection(MethodCallExpression node)
+    {
+        // Set flag to allow Enumerable methods inside the projection
+        _insideGroupByProjection = true;
+
+        try
+        {
+            // Parse: .Select(g => new { g.Key, Total = g.Sum(x => x.Salary), ... })
+            var selectorArg = node.Arguments[1];
+            if (selectorArg is not UnaryExpression unary || unary.Operand is not LambdaExpression lambda)
+                return;
+
+            var body = lambda.Body;
+
+            // Handle anonymous type: new { g.Key, Total = g.Sum(...) }
+            if (body is NewExpression newExpr)
+            {
+                AnalyzeProjectionMembers(newExpr, lambda.Parameters[0]);
+            }
+            // Handle member init: new ResultType { Key = g.Key, Total = g.Sum(...) }
+            else if (body is MemberInitExpression memberInit)
+            {
+                AnalyzeProjectionMemberInit(memberInit, lambda.Parameters[0]);
+            }
+            else
+            {
+                _hasUnsupportedPatterns = true;
+                _unsupportedReasons.Add("GroupBy projection must be an anonymous type or object initializer.");
+            }
+        }
+        finally
+        {
+            _insideGroupByProjection = false;
+        }
+    }
+
+    private void AnalyzeProjectionMembers(NewExpression newExpr, ParameterExpression groupParam)
+    {
+        if (newExpr.Members is null) return;
+
+        for (int i = 0; i < newExpr.Arguments.Count; i++)
+        {
+            var arg = newExpr.Arguments[i];
+            var memberName = newExpr.Members[i].Name;
+
+            AnalyzeProjectionMember(arg, memberName, groupParam);
+        }
+    }
+
+    private void AnalyzeProjectionMemberInit(MemberInitExpression memberInit, ParameterExpression groupParam)
+    {
+        foreach (var binding in memberInit.Bindings)
+        {
+            if (binding is MemberAssignment assignment)
+            {
+                AnalyzeProjectionMember(assignment.Expression, binding.Member.Name, groupParam);
+            }
+        }
+    }
+
+    private void AnalyzeProjectionMember(Expression expression, string memberName, ParameterExpression groupParam)
+    {
+        // Check for g.Key
+        if (expression is MemberExpression memberExpr && 
+            memberExpr.Expression == groupParam && 
+            memberExpr.Member.Name == "Key")
+        {
+            // This is the key - already tracked via GroupByColumn
+            return;
+        }
+
+        // Check for g.Count()
+        if (expression is MethodCallExpression countCall && 
+            countCall.Method.Name == "Count" &&
+            countCall.Arguments.Count >= 1 &&
+            IsGroupParameter(countCall.Arguments[0], groupParam))
+        {
+            _aggregations.Add(new AggregationDescriptor
+            {
+                Operation = AggregationOperation.Count,
+                ColumnName = null,
+                ResultPropertyName = memberName
+            });
+            return;
+        }
+
+        // Check for g.LongCount()
+        if (expression is MethodCallExpression longCountCall && 
+            longCountCall.Method.Name == "LongCount" &&
+            longCountCall.Arguments.Count >= 1 &&
+            IsGroupParameter(longCountCall.Arguments[0], groupParam))
+        {
+            _aggregations.Add(new AggregationDescriptor
+            {
+                Operation = AggregationOperation.LongCount,
+                ColumnName = null,
+                ResultPropertyName = memberName
+            });
+            return;
+        }
+
+        // Check for g.Sum(x => x.Salary), g.Average(...), g.Min(...), g.Max(...)
+        if (expression is MethodCallExpression aggCall && 
+            AggregateMethods.Contains(aggCall.Method.Name) &&
+            aggCall.Arguments.Count >= 2)
+        {
+            // The selector is the second argument
+            var selectorArg = aggCall.Arguments[1];
+            LambdaExpression? aggLambda = null;
+            
+            // Handle different wrapping: UnaryExpression or direct lambda
+            if (selectorArg is UnaryExpression unary && unary.Operand is LambdaExpression lambda1)
+            {
+                aggLambda = lambda1;
+            }
+            else if (selectorArg is LambdaExpression lambda2)
+            {
+                aggLambda = lambda2;
+            }
+            
+            if (aggLambda is not null)
+            {
+                var columnName = ExtractColumnNameFromSelector(aggLambda);
+                if (columnName is not null)
+                {
+                    var operation = aggCall.Method.Name switch
+                    {
+                        "Sum" => AggregationOperation.Sum,
+                        "Average" => AggregationOperation.Average,
+                        "Min" => AggregationOperation.Min,
+                        "Max" => AggregationOperation.Max,
+                        _ => throw new NotSupportedException($"Unknown aggregate: {aggCall.Method.Name}")
+                    };
+
+                    _aggregations.Add(new AggregationDescriptor
+                    {
+                        Operation = operation,
+                        ColumnName = columnName,
+                        ResultPropertyName = memberName
+                    });
+                    _columnsAccessed.Add(columnName);
+                    return;
+                }
+            }
+        }
+
+        // Unsupported projection member
+        _hasUnsupportedPatterns = true;
+        _unsupportedReasons.Add($"Unsupported projection member '{memberName}'. " +
+            "Only g.Key, g.Count(), g.Sum(x => x.Col), g.Average(x => x.Col), g.Min(x => x.Col), g.Max(x => x.Col) are supported.");
+    }
+
+    private static bool IsGroupParameter(Expression expression, ParameterExpression groupParam)
+    {
+        return expression == groupParam || 
+               (expression is UnaryExpression unary && unary.Operand == groupParam);
     }
 
     private double EstimateSelectivity()

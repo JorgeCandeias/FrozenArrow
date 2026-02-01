@@ -9,19 +9,13 @@ namespace ArrowCollection.Query;
 /// </summary>
 public sealed class PredicateAnalyzer : ExpressionVisitor
 {
-    private readonly Dictionary<string, int> _columnIndexMap;
-    private readonly List<ColumnPredicate> _predicates = new();
-    private readonly List<string> _unsupportedReasons = new();
+    private readonly List<ColumnPredicate> _predicates = [];
+    private readonly List<string> _unsupportedReasons = [];
     private ParameterExpression? _parameter;
 
     public IReadOnlyList<ColumnPredicate> Predicates => _predicates;
     public IReadOnlyList<string> UnsupportedReasons => _unsupportedReasons;
     public bool HasUnsupportedPatterns => _unsupportedReasons.Count > 0;
-
-    public PredicateAnalyzer(Dictionary<string, int> columnIndexMap)
-    {
-        _columnIndexMap = columnIndexMap;
-    }
 
     /// <summary>
     /// Analyzes a predicate expression and extracts column-level predicates.
@@ -30,8 +24,10 @@ public sealed class PredicateAnalyzer : ExpressionVisitor
         Expression<Func<T, bool>> predicate,
         Dictionary<string, int> columnIndexMap)
     {
-        var analyzer = new PredicateAnalyzer(columnIndexMap);
-        analyzer._parameter = predicate.Parameters[0];
+        var analyzer = new PredicateAnalyzer
+        {
+            _parameter = predicate.Parameters[0]
+        };
         analyzer.Visit(predicate.Body);
 
         // Resolve column indices for extracted predicates
@@ -194,34 +190,45 @@ public sealed class PredicateAnalyzer : ExpressionVisitor
         predicate = null;
 
         // Handle: x.Property.Contains("value"), x.Property.StartsWith("value"), x.Property.EndsWith("value")
+        // Also handles char overloads: x.Property.Contains('a'), etc.
         if (node.Object is MemberExpression memberExpr && 
             TryGetColumnName(memberExpr, out var columnName) &&
             node.Arguments.Count >= 1 &&
-            TryGetConstantValue(node.Arguments[0], out var patternObj) &&
-            patternObj is string pattern)
+            TryGetConstantValue(node.Arguments[0], out var patternObj))
         {
-            StringOperation? operation = node.Method.Name switch
+            // Handle both string and char arguments
+            string? pattern = patternObj switch
             {
-                "Contains" => StringOperation.Contains,
-                "StartsWith" => StringOperation.StartsWith,
-                "EndsWith" => StringOperation.EndsWith,
+                string s => s,
+                char c => c.ToString(),
                 _ => null
             };
 
-            if (operation is not null)
+            if (pattern is not null)
             {
-                var comparison = StringComparison.Ordinal;
-                
-                // Check for StringComparison argument
-                if (node.Arguments.Count >= 2 && 
-                    TryGetConstantValue(node.Arguments[1], out var compObj) &&
-                    compObj is StringComparison comp)
+                StringOperation? operation = node.Method.Name switch
                 {
-                    comparison = comp;
-                }
+                    "Contains" => StringOperation.Contains,
+                    "StartsWith" => StringOperation.StartsWith,
+                    "EndsWith" => StringOperation.EndsWith,
+                    _ => null
+                };
 
-                predicate = new StringOperationPredicate(columnName, pattern, operation.Value, comparison);
-                return true;
+                if (operation is not null)
+                {
+                    var comparison = StringComparison.Ordinal;
+                    
+                    // Check for StringComparison argument
+                    if (node.Arguments.Count >= 2 && 
+                        TryGetConstantValue(node.Arguments[1], out var compObj) &&
+                        compObj is StringComparison comp)
+                    {
+                        comparison = comp;
+                    }
+
+                    predicate = new StringOperationPredicate(columnName, pattern, operation.Value, comparison);
+                    return true;
+                }
             }
         }
 
@@ -229,7 +236,7 @@ public sealed class PredicateAnalyzer : ExpressionVisitor
         if (node.Method.DeclaringType == typeof(string) && 
             node.Arguments.Count == 1 &&
             node.Arguments[0] is MemberExpression argMember &&
-            TryGetColumnName(argMember, out var colName))
+            TryGetColumnName(argMember, out _))
         {
             if (node.Method.Name == "IsNullOrEmpty" || node.Method.Name == "IsNullOrWhiteSpace")
             {
@@ -345,7 +352,7 @@ public sealed class PredicateAnalyzer : ExpressionVisitor
 /// </summary>
 public sealed class PredicateAnalysisResult
 {
-    public IReadOnlyList<ColumnPredicate> Predicates { get; init; } = Array.Empty<ColumnPredicate>();
-    public IReadOnlyList<string> UnsupportedReasons { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<ColumnPredicate> Predicates { get; init; } = [];
+    public IReadOnlyList<string> UnsupportedReasons { get; init; } = [];
     public bool IsFullySupported { get; init; }
 }
