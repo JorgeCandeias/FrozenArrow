@@ -1,4 +1,6 @@
 using ArrowCollection.Query;
+using System.Collections.Immutable;
+using System.Collections.Frozen;
 
 namespace ArrowCollection.Tests;
 
@@ -368,5 +370,76 @@ public class ArrowQueryTests
             .AllowFallback();
 
         Assert.NotNull(query);
+    }
+
+    [Fact]
+    public void ToImmutableArray_WorksWithArrowQuery()
+    {
+        // Arrange
+        var collection = CreateTestCollection();
+
+        // Act - ToImmutableArray is from System.Collections.Immutable
+        var results = collection
+            .AsQueryable()
+            .Where(x => x.Age > 30)
+            .ToImmutableArray();
+
+        // Assert
+        Assert.IsType<ImmutableArray<QueryTestRecord>>(results);
+        Assert.Equal(6, results.Length);
+        Assert.All(results, r => Assert.True(r.Age > 30));
+    }
+
+    [Fact]
+    public void ToFrozenSet_WorksWithArrowQuery()
+    {
+        // Arrange
+        var collection = CreateTestCollection();
+
+        // Act - ToFrozenSet is from System.Collections.Frozen
+        var results = collection
+            .AsQueryable()
+            .Where(x => x.Category == "Engineering")
+            .ToFrozenSet();
+
+        // Assert
+        Assert.Equal(5, results.Count);
+        Assert.All(results, r => Assert.Equal("Engineering", r.Category));
+    }
+
+    [Fact]
+    public void ToHashSet_WorksWithArrowQuery()
+    {
+        // Arrange
+        var collection = CreateTestCollection();
+
+        // Act
+        var results = collection
+            .AsQueryable()
+            .Where(x => x.IsActive)
+            .ToHashSet();
+
+        // Assert
+        Assert.Equal(7, results.Count);
+        Assert.All(results, r => Assert.True(r.IsActive));
+    }
+
+    [Fact]
+    public void ToDictionary_WorksWithArrowQuery()
+    {
+        // Arrange
+        var collection = CreateTestCollection();
+
+        // Act
+        var results = collection
+            .AsQueryable()
+            .Where(x => x.Id <= 3)
+            .ToDictionary(x => x.Id);
+
+        // Assert
+        Assert.Equal(3, results.Count);
+        Assert.Contains(1, results.Keys);
+        Assert.Contains(2, results.Keys);
+        Assert.Contains(3, results.Keys);
     }
 }
