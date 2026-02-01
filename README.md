@@ -12,6 +12,7 @@ ArrowCollection is a .NET library that implements a frozen generic collection wi
 - **IDisposable**: Properly releases unmanaged Arrow memory when disposed
 - **Serialization**: Read/write to streams and buffers using Arrow IPC format
 - **Schema Evolution**: Name-based column matching with configurable validation
+- **Positional Records**: Full support for C# records without parameterless constructors
 
 ## Installation
 
@@ -262,6 +263,63 @@ foreach (var point in collection)
 
 **Note**: For structs, the library uses ref-based IL emission to set fields without copying, ensuring optimal performance even for readonly structs.
 
+### Using Positional Records
+
+ArrowCollection fully supports C# positional records (both `record class` and `record struct`) without requiring a parameterless constructor:
+
+```csharp
+// Positional record class - no parameterless constructor needed!
+[ArrowRecord]
+public record Person(
+    [property: ArrowArray] int Id,
+    [property: ArrowArray] string Name,
+    [property: ArrowArray] double Salary);
+
+// Positional record struct
+[ArrowRecord]
+public record struct Point(
+    [property: ArrowArray] int X,
+    [property: ArrowArray] int Y);
+
+// Readonly positional record struct
+[ArrowRecord]
+public readonly record struct ImmutablePoint(
+    [property: ArrowArray] double X,
+    [property: ArrowArray] double Y);
+
+// Usage
+var people = new[]
+{
+    new Person(1, "Alice", 50000.0),
+    new Person(2, "Bob", 60000.0)
+};
+
+using var collection = people.ToArrowCollection();
+
+foreach (var person in collection)
+{
+    Console.WriteLine($"{person.Name} earns {person.Salary:C}");
+}
+```
+
+You can also mix positional parameters with additional properties:
+
+```csharp
+[ArrowRecord]
+public record Employee(
+    [property: ArrowArray] int Id,
+    [property: ArrowArray] string Name)
+{
+    [ArrowArray]
+    public DateTime HireDate { get; init; }
+    
+    [ArrowArray]
+    public decimal Salary { get; init; }
+}
+```
+
+> **Note**: For positional records, use the `[property: ArrowArray]` syntax to apply the attribute to the generated property. This is standard C# syntax for targeting attributes to specific elements.
+
 ## Important: Frozen Collection Semantics
 
 ArrowCollection is a **frozen collection** by design:
@@ -271,11 +329,29 @@ ArrowCollection is a **frozen collection** by design:
 - **Items are reconstructed on enumeration**: Each enumeration creates new instances from the stored columnar data
 - **Original source independence**: Changes to the original source collection have no effect on the ArrowCollection
 - **Reconstructed item independence**: Modifying items obtained during enumeration has no effect on the stored data
+- **Constructors are bypassed**: Items are created without calling constructors; fields are set directly
 
 This frozen design enables:
 - Thread-safe reading without locks
 - Consistent data regardless of original source mutations
 - Optimizations based on immutability guarantees
+- Support for positional records without parameterless constructors
+
+### Constructor Bypass Behavior
+
+ArrowCollection uses a technique similar to [Orleans serialization](https://learn.microsoft.com/en-us/dotnet/orleans/host/configuration-guide/serialization) where constructors are intentionally bypassed during item reconstruction:
+
+- **Classes**: Created using `RuntimeHelpers.GetUninitializedObject` (no constructor called)
+- **Structs**: Created using `default(T)` (no boxing overhead)
+- **Fields**: Set directly via generated code, bypassing property setters
+
+This means:
+- ✅ Positional records work without a parameterless constructor
+- ✅ Readonly fields and init-only properties are fully supported
+- ⚠️ Constructor validation logic is **not** executed
+- ⚠️ Field initializers are **not** executed
+
+This behavior is by design, as ArrowCollection expects types to be **pure data containers** without logic in constructors or property setters.
 
 ## Serialization
 

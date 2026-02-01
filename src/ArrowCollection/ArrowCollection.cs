@@ -9,9 +9,22 @@ namespace ArrowCollection;
 /// A frozen generic collection that stores data using Apache Arrow columnar format.
 /// This collection is immutable after creation and materializes items on-the-fly during enumeration.
 /// </summary>
-/// <typeparam name="T">The type of items in the collection. Must have a parameterless constructor.</typeparam>
+/// <typeparam name="T">The type of items in the collection.</typeparam>
 /// <remarks>
+/// <para>
 /// Initializes a new instance of the ArrowCollection class.
+/// </para>
+/// <para>
+/// <strong>Important:</strong> Constructors are bypassed during item reconstruction. Items are created
+/// using <see cref="System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject"/> for classes
+/// and <c>default(T)</c> for structs, then fields are set directly. This means:
+/// <list type="bullet">
+///   <item>Positional records work without a parameterless constructor</item>
+///   <item>Constructor validation logic is not executed</item>
+///   <item>Field initializers are not executed</item>
+/// </list>
+/// This behavior is by design, as ArrowCollection expects types to be pure data containers.
+/// </para>
 /// </remarks>
 /// <param name="recordBatch">The Arrow record batch containing the data.</param>
 /// <param name="count">The number of items in the collection.</param>
@@ -19,7 +32,7 @@ namespace ArrowCollection;
 public abstract class ArrowCollection<T>(
     RecordBatch recordBatch, 
     int count,
-    ArrowCollectionBuildStatistics? buildStatistics = null) : IEnumerable<T>, IDisposable where T : new()
+    ArrowCollectionBuildStatistics? buildStatistics = null) : IEnumerable<T>, IDisposable
 {
     private readonly RecordBatch _recordBatch = recordBatch ?? throw new ArgumentNullException(nameof(recordBatch));
     private readonly int _count = count;

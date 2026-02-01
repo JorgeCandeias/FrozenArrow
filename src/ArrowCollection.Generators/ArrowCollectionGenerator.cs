@@ -41,7 +41,9 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
     private static bool IsArrowRecordCandidate(SyntaxNode node)
     {
         return node is TypeDeclarationSyntax typeDecl &&
-               (typeDecl is ClassDeclarationSyntax || typeDecl is StructDeclarationSyntax) &&
+               (typeDecl is ClassDeclarationSyntax || 
+                typeDecl is StructDeclarationSyntax || 
+                typeDecl is RecordDeclarationSyntax) &&
                typeDecl.AttributeLists.Count > 0;
     }
 
@@ -366,7 +368,17 @@ public sealed class ArrowCollectionGenerator : IIncrementalGenerator
         // Generate CreateItem override with name-based column support
         sb.AppendLine($"{indent}    protected override {record.FullTypeName} CreateItem(RecordBatch recordBatch, int index)");
         sb.AppendLine($"{indent}    {{");
-        sb.AppendLine($"{indent}        var item = new {record.FullTypeName}();");
+        
+        // For structs: use default(T) to avoid boxing
+        // For classes: use RuntimeHelpers.GetUninitializedObject to support positional records
+        if (record.IsValueType)
+        {
+            sb.AppendLine($"{indent}        var item = default({record.FullTypeName});");
+        }
+        else
+        {
+            sb.AppendLine($"{indent}        var item = ({record.FullTypeName})global::System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof({record.FullTypeName}));");
+        }
         sb.AppendLine();
 
         for (int i = 0; i < record.Fields.Count; i++)

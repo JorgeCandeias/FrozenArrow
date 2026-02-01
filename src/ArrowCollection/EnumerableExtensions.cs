@@ -19,7 +19,7 @@ public static class EnumerableExtensions
     /// </remarks>
     /// <exception cref="ArgumentNullException">Thrown when source is null.</exception>
     /// <exception cref="InvalidOperationException">Thrown when the type T has not been processed by the source generator (missing [ArrowRecord] attribute or no [ArrowArray] properties).</exception>
-    public static ArrowCollection<T> ToArrowCollection<T>(this IEnumerable<T> source) where T : new()
+    public static ArrowCollection<T> ToArrowCollection<T>(this IEnumerable<T> source)
     {
         ArgumentNullException.ThrowIfNull(source);
 

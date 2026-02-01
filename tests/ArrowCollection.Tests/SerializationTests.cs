@@ -48,6 +48,7 @@ public class SerializationTests
         public int? NullableValue { get; set; }
     }
 
+
     [ArrowRecord]
     public struct SerializationStruct
     {
@@ -60,6 +61,42 @@ public class SerializationTests
         [ArrowArray]
         public double Value { get; set; }
     }
+
+    /// <summary>
+    /// Positional record class for serialization tests.
+    /// </summary>
+    [ArrowRecord]
+    public record PositionalRecord(
+        [property: ArrowArray] int Id,
+        [property: ArrowArray] string Name,
+        [property: ArrowArray] double Value);
+
+    /// <summary>
+    /// Positional record class with explicit column names.
+    /// </summary>
+    [ArrowRecord]
+    public record PositionalRecordWithNames(
+        [property: ArrowArray(Name = "record_id")] int Id,
+        [property: ArrowArray(Name = "record_name")] string Name,
+        [property: ArrowArray(Name = "record_value")] double Value);
+
+    /// <summary>
+    /// Positional record struct for serialization tests.
+    /// </summary>
+    [ArrowRecord]
+    public record struct PositionalRecordStruct(
+        [property: ArrowArray] int Id,
+        [property: ArrowArray] string Name,
+        [property: ArrowArray] double Value);
+
+    /// <summary>
+    /// Readonly positional record struct for serialization tests.
+    /// </summary>
+    [ArrowRecord]
+    public readonly record struct ReadonlyPositionalRecordStruct(
+        [property: ArrowArray] int Id,
+        [property: ArrowArray] string Name,
+        [property: ArrowArray] double Value);
 
     #endregion
 
@@ -211,20 +248,180 @@ public class SerializationTests
 
         // Act
         var buffer = new ArrayBufferWriter<byte>();
-        original.WriteTo(buffer);
-        using var deserialized = ArrowCollection<SerializationStruct>.ReadFrom(buffer.WrittenSpan);
+            original.WriteTo(buffer);
+            using var deserialized = ArrowCollection<SerializationStruct>.ReadFrom(buffer.WrittenSpan);
 
-        // Assert
-        var deserializedList = deserialized.ToList();
-        Assert.Equal(2, deserializedList.Count);
-        Assert.Equal(1, deserializedList[0].Id);
-        Assert.Equal("StructItem1", deserializedList[0].Name);
-        Assert.Equal(11.1, deserializedList[0].Value);
-    }
+            // Assert
+            var deserializedList = deserialized.ToList();
+            Assert.Equal(2, deserializedList.Count);
+            Assert.Equal(1, deserializedList[0].Id);
+            Assert.Equal("StructItem1", deserializedList[0].Name);
+            Assert.Equal(11.1, deserializedList[0].Value);
+        }
 
-    [Fact]
-    public void RoundTrip_WithEmptyCollection_PreservesEmpty()
-    {
+        [Fact]
+        public void RoundTrip_WithPositionalRecordClass_PreservesData()
+        {
+            // Arrange
+            var items = new[]
+            {
+                new PositionalRecord(1, "Alice", 10.5),
+                new PositionalRecord(2, "Bob", 20.5),
+                new PositionalRecord(3, "Charlie", 30.5)
+            };
+
+            using var original = items.ToArrowCollection();
+
+            // Act
+            var buffer = new ArrayBufferWriter<byte>();
+            original.WriteTo(buffer);
+            using var deserialized = ArrowCollection<PositionalRecord>.ReadFrom(buffer.WrittenSpan);
+
+            // Assert
+            Assert.Equal(original.Count, deserialized.Count);
+
+            var deserializedList = deserialized.ToList();
+            Assert.Equal(1, deserializedList[0].Id);
+            Assert.Equal("Alice", deserializedList[0].Name);
+            Assert.Equal(10.5, deserializedList[0].Value);
+
+            Assert.Equal(3, deserializedList[2].Id);
+            Assert.Equal("Charlie", deserializedList[2].Name);
+            Assert.Equal(30.5, deserializedList[2].Value);
+        }
+
+        [Fact]
+        public void RoundTrip_WithPositionalRecordClassAndExplicitNames_PreservesData()
+        {
+            // Arrange
+            var items = new[]
+            {
+                new PositionalRecordWithNames(1, "Named1", 100.0),
+                new PositionalRecordWithNames(2, "Named2", 200.0)
+            };
+
+            using var original = items.ToArrowCollection();
+
+            // Act
+            var buffer = new ArrayBufferWriter<byte>();
+            original.WriteTo(buffer);
+            using var deserialized = ArrowCollection<PositionalRecordWithNames>.ReadFrom(buffer.WrittenSpan);
+
+            // Assert
+            var deserializedList = deserialized.ToList();
+            Assert.Equal(2, deserializedList.Count);
+            Assert.Equal(1, deserializedList[0].Id);
+            Assert.Equal("Named1", deserializedList[0].Name);
+            Assert.Equal(100.0, deserializedList[0].Value);
+        }
+
+        [Fact]
+        public void RoundTrip_WithPositionalRecordStruct_PreservesData()
+        {
+            // Arrange
+            var items = new[]
+            {
+                new PositionalRecordStruct(1, "StructRec1", 11.1),
+                new PositionalRecordStruct(2, "StructRec2", 22.2),
+                new PositionalRecordStruct(3, "StructRec3", 33.3)
+            };
+
+            using var original = items.ToArrowCollection();
+
+            // Act
+            var buffer = new ArrayBufferWriter<byte>();
+            original.WriteTo(buffer);
+            using var deserialized = ArrowCollection<PositionalRecordStruct>.ReadFrom(buffer.WrittenSpan);
+
+            // Assert
+            var deserializedList = deserialized.ToList();
+            Assert.Equal(3, deserializedList.Count);
+            Assert.Equal(1, deserializedList[0].Id);
+            Assert.Equal("StructRec1", deserializedList[0].Name);
+            Assert.Equal(11.1, deserializedList[0].Value);
+
+            Assert.Equal(3, deserializedList[2].Id);
+            Assert.Equal("StructRec3", deserializedList[2].Name);
+        }
+
+        [Fact]
+        public void RoundTrip_WithReadonlyPositionalRecordStruct_PreservesData()
+        {
+            // Arrange
+            var items = new[]
+            {
+                new ReadonlyPositionalRecordStruct(1, "Readonly1", 1.1),
+                new ReadonlyPositionalRecordStruct(2, "Readonly2", 2.2)
+            };
+
+            using var original = items.ToArrowCollection();
+
+            // Act
+            var buffer = new ArrayBufferWriter<byte>();
+            original.WriteTo(buffer);
+            using var deserialized = ArrowCollection<ReadonlyPositionalRecordStruct>.ReadFrom(buffer.WrittenSpan);
+
+            // Assert
+            var deserializedList = deserialized.ToList();
+            Assert.Equal(2, deserializedList.Count);
+            Assert.Equal(1, deserializedList[0].Id);
+            Assert.Equal("Readonly1", deserializedList[0].Name);
+            Assert.Equal(1.1, deserializedList[0].Value);
+        }
+
+        [Fact]
+        public async Task RoundTripAsync_WithPositionalRecordClass_PreservesData()
+        {
+            // Arrange
+            var items = new[]
+            {
+                new PositionalRecord(1, "Async1", 100.0),
+                new PositionalRecord(2, "Async2", 200.0)
+            };
+
+            using var original = items.ToArrowCollection();
+            using var stream = new MemoryStream();
+
+            // Act
+            await original.WriteToAsync(stream);
+            stream.Position = 0;
+            using var deserialized = await ArrowCollection<PositionalRecord>.ReadFromAsync(stream);
+
+            // Assert
+            var deserializedList = deserialized.ToList();
+            Assert.Equal(2, deserializedList.Count);
+            Assert.Equal("Async1", deserializedList[0].Name);
+            Assert.Equal("Async2", deserializedList[1].Name);
+        }
+
+        [Fact]
+        public async Task RoundTripAsync_WithPositionalRecordStruct_PreservesData()
+        {
+            // Arrange
+            var items = new[]
+            {
+                new PositionalRecordStruct(1, "AsyncStruct1", 10.0),
+                new PositionalRecordStruct(2, "AsyncStruct2", 20.0)
+            };
+
+            using var original = items.ToArrowCollection();
+            using var stream = new MemoryStream();
+
+            // Act
+            await original.WriteToAsync(stream);
+            stream.Position = 0;
+            using var deserialized = await ArrowCollection<PositionalRecordStruct>.ReadFromAsync(stream);
+
+            // Assert
+            var deserializedList = deserialized.ToList();
+            Assert.Equal(2, deserializedList.Count);
+            Assert.Equal("AsyncStruct1", deserializedList[0].Name);
+            Assert.Equal("AsyncStruct2", deserializedList[1].Name);
+        }
+
+        [Fact]
+        public void RoundTrip_WithEmptyCollection_PreservesEmpty()
+        {
         // Arrange
         var items = Array.Empty<SimpleRecord>();
         using var original = items.ToArrowCollection();

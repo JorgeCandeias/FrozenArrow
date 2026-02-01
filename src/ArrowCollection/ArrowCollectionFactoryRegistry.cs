@@ -18,7 +18,7 @@ public static class ArrowCollectionFactoryRegistry
     /// </summary>
     /// <typeparam name="T">The ArrowRecord type.</typeparam>
     /// <param name="factory">The factory delegate that creates ArrowCollection instances.</param>
-    public static void Register<T>(Func<IEnumerable<T>, ArrowCollection<T>> factory) where T : new()
+    public static void Register<T>(Func<IEnumerable<T>, ArrowCollection<T>> factory)
     {
         _factories[typeof(T)] = factory;
     }
@@ -29,7 +29,7 @@ public static class ArrowCollectionFactoryRegistry
     /// </summary>
     /// <typeparam name="T">The ArrowRecord type.</typeparam>
     /// <param name="factory">The factory delegate that creates ArrowCollection instances from a RecordBatch.</param>
-    public static void RegisterDeserialization<T>(Func<RecordBatch, ArrowReadOptions, ArrowCollection<T>> factory) where T : new()
+    public static void RegisterDeserialization<T>(Func<RecordBatch, ArrowReadOptions, ArrowCollection<T>> factory)
     {
         _deserializationFactories[typeof(T)] = factory;
     }
@@ -40,7 +40,7 @@ public static class ArrowCollectionFactoryRegistry
     /// <typeparam name="T">The ArrowRecord type.</typeparam>
     /// <param name="factory">The factory delegate if found; otherwise, null.</param>
     /// <returns>True if a factory was found; otherwise, false.</returns>
-    internal static bool TryGetFactory<T>(out Func<IEnumerable<T>, ArrowCollection<T>>? factory) where T : new()
+    internal static bool TryGetFactory<T>(out Func<IEnumerable<T>, ArrowCollection<T>>? factory)
     {
         if (_factories.TryGetValue(typeof(T), out var factoryDelegate))
         {
@@ -57,7 +57,7 @@ public static class ArrowCollectionFactoryRegistry
     /// <typeparam name="T">The ArrowRecord type.</typeparam>
     /// <param name="factory">The factory delegate if found; otherwise, null.</param>
     /// <returns>True if a factory was found; otherwise, false.</returns>
-    internal static bool TryGetDeserializationFactory<T>(out Func<RecordBatch, ArrowReadOptions, ArrowCollection<T>>? factory) where T : new()
+    internal static bool TryGetDeserializationFactory<T>(out Func<RecordBatch, ArrowReadOptions, ArrowCollection<T>>? factory)
     {
         if (_deserializationFactories.TryGetValue(typeof(T), out var factoryDelegate))
         {
