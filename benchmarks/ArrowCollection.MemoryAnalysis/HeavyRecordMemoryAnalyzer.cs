@@ -24,10 +24,10 @@ public static class HeavyRecordMemoryAnalyzer
     public static void Run()
     {
         Console.WriteLine();
-        Console.WriteLine("????????????????????????????????????????????????????????????????????????????????");
-        Console.WriteLine("?           EXTREME SCENARIO: 200-PROPERTY RECORD MEMORY ANALYSIS              ?");
-        Console.WriteLine("?  1 Million items with 200 properties each (sparse wide dataset)              ?");
-        Console.WriteLine("????????????????????????????????????????????????????????????????????????????????");
+        Console.WriteLine("+==============================================================================+");
+        Console.WriteLine("|           EXTREME SCENARIO: 200-PROPERTY RECORD MEMORY ANALYSIS              |");
+        Console.WriteLine("|  1 Million items with 200 properties each (sparse wide dataset)              |");
+        Console.WriteLine("+==============================================================================+");
         Console.WriteLine();
 
         PrintScenarioDetails();
@@ -35,7 +35,7 @@ public static class HeavyRecordMemoryAnalyzer
 
         Console.WriteLine();
         Console.WriteLine("EMPIRICAL MEMORY ANALYSIS");
-        Console.WriteLine("?????????????????????????");
+        Console.WriteLine("=========================");
         Console.WriteLine();
 
         WarmUp();
@@ -50,18 +50,18 @@ public static class HeavyRecordMemoryAnalyzer
     private static void PrintScenarioDetails()
     {
         Console.WriteLine("SCENARIO DETAILS");
-        Console.WriteLine("????????????????");
+        Console.WriteLine("================");
         Console.WriteLine();
         Console.WriteLine($"  Total items:          {ItemCount:N0}");
         Console.WriteLine($"  Properties per item:  200");
         Console.WriteLine($"  Random seed:          {RandomSeed}");
         Console.WriteLine();
         Console.WriteLine("  Property breakdown (sparse wide dataset simulation):");
-    Console.WriteLine("    ??? 10 string properties    (low cardinality: 100 distinct values each)");
-        Console.WriteLine("    ??? 5  DateTime properties  (high cardinality: unique timestamps)");
-        Console.WriteLine("    ??? 62 int properties       (10 randomly active per item, 52 zero)");
-        Console.WriteLine("    ??? 62 double properties    (10 randomly active per item, 52 zero)");
-        Console.WriteLine("    ??? 61 decimal properties   (10 randomly active per item, 51 zero)");
+        Console.WriteLine("    +-- 10 string properties    (low cardinality: 100 distinct values each)");
+        Console.WriteLine("    +-- 5  DateTime properties  (high cardinality: unique timestamps)");
+        Console.WriteLine("    +-- 62 int properties       (10 randomly active per item, 52 zero)");
+        Console.WriteLine("    +-- 62 double properties    (10 randomly active per item, 52 zero)");
+        Console.WriteLine("    +-- 61 decimal properties   (10 randomly active per item, 51 zero)");
         Console.WriteLine();
         Console.WriteLine("  Note: Active properties are randomly selected per item using a fixed seed");
         Console.WriteLine("        to simulate realistic sparse data patterns in production use cases.");
@@ -71,7 +71,7 @@ public static class HeavyRecordMemoryAnalyzer
     private static void RunTheoreticalAnalysis()
     {
         Console.WriteLine("THEORETICAL MEMORY ANALYSIS");
-        Console.WriteLine("???????????????????????????");
+        Console.WriteLine("===========================");
         Console.WriteLine();
 
         var objectHeaderSize = IntPtr.Size == 8 ? 16 : 8;
@@ -143,9 +143,9 @@ public static class HeavyRecordMemoryAnalyzer
 
     private static void RunEmpiricalAnalysis(string scenarioTitle, bool usePreSorting)
     {
-        Console.WriteLine($"?????????????????????????????????????????????????????????????????????");
+        Console.WriteLine($"---------------------------------------------------------------------");
         Console.WriteLine(scenarioTitle);
-        Console.WriteLine($"?????????????????????????????????????????????????????????????????????");
+        Console.WriteLine($"---------------------------------------------------------------------");
         Console.WriteLine();
 
         // Measure List<T>
@@ -224,7 +224,7 @@ public static class HeavyRecordMemoryAnalyzer
         if (arrowCollection.BuildStatistics is not null)
         {
             Console.WriteLine("BUILD STATISTICS:");
-            Console.WriteLine("?????????????????");
+            Console.WriteLine("-----------------");
             var stats = arrowCollection.BuildStatistics;
             Console.WriteLine($"  Statistics collection time: {stats.StatisticsCollectionTime?.TotalMilliseconds:F2}ms");
             Console.WriteLine($"  Estimated memory savings with optimal encoding: {stats.EstimateMemorySavings() / (1024.0 * 1024.0):F2} MB");
@@ -259,14 +259,14 @@ public static class HeavyRecordMemoryAnalyzer
         var savingsPercent = (1.0 - totalArrowMB / listMB) * 100;
         var savingsMB = listMB - totalArrowMB;
 
-        Console.WriteLine("????????????????????????????????????????????????????????????????????");
-        Console.WriteLine($"?  {(usePreSorting ? "PRE-SORTED" : "RANDOM ORDER"),-15} SUMMARY                                    ?");
-        Console.WriteLine("????????????????????????????????????????????????????????????????????");
-        Console.WriteLine($"?  List<T>:                {listMB,10:F2} MB ({listGB:F4} GB)       ?");
-        Console.WriteLine($"?  ArrowCollection:        {totalArrowMB,10:F2} MB ({totalArrowGB:F4} GB)       ?");
-        Console.WriteLine("????????????????????????????????????????????????????????????????????");
-        Console.WriteLine($"?  Memory savings:         {savingsMB,10:F2} MB ({savingsPercent:F1}%)          ?");
-        Console.WriteLine("????????????????????????????????????????????????????????????????????");
+        Console.WriteLine("+==================================================================+");
+        Console.WriteLine($"|  {(usePreSorting ? "PRE-SORTED" : "RANDOM ORDER"),-15} SUMMARY                                    |");
+        Console.WriteLine("+==================================================================+");
+        Console.WriteLine($"|  List<T>:                {listMB,10:F2} MB ({listGB:F4} GB)       |");
+        Console.WriteLine($"|  ArrowCollection:        {totalArrowMB,10:F2} MB ({totalArrowGB:F4} GB)       |");
+        Console.WriteLine("+------------------------------------------------------------------+");
+        Console.WriteLine($"|  Memory savings:         {savingsMB,10:F2} MB ({savingsPercent:F1}%)          |");
+        Console.WriteLine("+==================================================================+");
         Console.WriteLine();
 
         GC.KeepAlive(arrowCollection);
