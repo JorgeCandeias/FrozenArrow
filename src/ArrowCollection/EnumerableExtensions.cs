@@ -30,7 +30,7 @@ public static class EnumerableExtensions
             throw new InvalidOperationException(
                 $"Type {typeof(T).Name} is not a valid ArrowRecord type. " +
                 $"Ensure the type is marked with [{nameof(ArrowRecordAttribute)}] and has at least one property marked with [{nameof(ArrowArrayAttribute)}]. " +
-                $"The ArrowCollection source generator must process the type at compile time.");
+                $"The {nameof(ArrowCollection<>)} source generator must process the type at compile time.");
         }
 
         return factory!(source);

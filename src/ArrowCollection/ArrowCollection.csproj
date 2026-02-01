@@ -1,20 +1,21 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <RootNamespace>ArrowCollection</RootNamespace>
-    <AssemblyName>ArrowCollection</AssemblyName>
-  </PropertyGroup>
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<RootNamespace>ArrowCollection</RootNamespace>
+		<AssemblyName>ArrowCollection</AssemblyName>
+		<EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+	</PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Apache.Arrow" Version="22.1.0" />
-  </ItemGroup>
+	<ItemGroup>
+		<PackageReference Include="Apache.Arrow" Version="22.1.0" />
+	</ItemGroup>
 
-  <!-- Reference the source generator project and package it as an analyzer -->
-  <ItemGroup>
-    <ProjectReference Include="..\ArrowCollection.Generators\ArrowCollection.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
-  </ItemGroup>
+	<!-- Reference the source generator project and package it as an analyzer -->
+	<ItemGroup>
+		<ProjectReference Include="..\ArrowCollection.Generators\ArrowCollection.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+	</ItemGroup>
 
 </Project>
