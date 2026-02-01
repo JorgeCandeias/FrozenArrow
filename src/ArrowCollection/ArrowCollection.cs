@@ -1,4 +1,5 @@
 using Apache.Arrow;
+using Apache.Arrow.Ipc;
 using System.Buffers;
 using System.Collections;
 
@@ -70,6 +71,174 @@ public abstract class ArrowCollection<T>(
             _disposed = true;
         }
     }
+
+    #region Serialization - Writing
+
+    /// <summary>
+    /// Writes the collection to the specified buffer writer using Arrow IPC format.
+    /// </summary>
+    /// <param name="writer">The buffer writer to write to.</param>
+    /// <param name="options">Optional write options. If null, default options are used.</param>
+    /// <exception cref="ObjectDisposedException">The collection has been disposed.</exception>
+    public void WriteTo(IBufferWriter<byte> writer, ArrowWriteOptions? options = null)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(writer);
+
+        using var stream = new BufferWriterStream(writer);
+        WriteToStreamCore(stream);
+    }
+
+    /// <summary>
+    /// Asynchronously writes the collection to the specified stream using Arrow IPC format.
+    /// </summary>
+    /// <param name="stream">The stream to write to.</param>
+    /// <param name="options">Optional write options. If null, default options are used.</param>
+    /// <param name="cancellationToken">A cancellation token to observe.</param>
+    /// <exception cref="ObjectDisposedException">The collection has been disposed.</exception>
+    public async Task WriteToAsync(Stream stream, ArrowWriteOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(stream);
+
+        await WriteToStreamCoreAsync(stream, cancellationToken).ConfigureAwait(false);
+    }
+
+    private void WriteToStreamCore(Stream stream)
+    {
+        using var writer = new ArrowStreamWriter(stream, _recordBatch.Schema, leaveOpen: true);
+        writer.WriteRecordBatch(_recordBatch);
+        writer.WriteEnd();
+    }
+
+    private async Task WriteToStreamCoreAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        using var writer = new ArrowStreamWriter(stream, _recordBatch.Schema, leaveOpen: true);
+        await writer.WriteRecordBatchAsync(_recordBatch, cancellationToken).ConfigureAwait(false);
+        await writer.WriteEndAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    #endregion
+
+    #region Serialization - Reading
+
+    /// <summary>
+    /// Reads an ArrowCollection from the specified byte span using Arrow IPC format.
+    /// </summary>
+    /// <param name="data">The byte span containing the serialized data.</param>
+    /// <param name="options">Optional read options. If null, default options are used.</param>
+    /// <returns>A new ArrowCollection populated from the serialized data.</returns>
+    public static ArrowCollection<T> ReadFrom(ReadOnlySpan<byte> data, ArrowReadOptions? options = null)
+    {
+        // Copy span to array since we need a stream for Arrow IPC reader
+        var array = data.ToArray();
+        using var stream = new MemoryStream(array, writable: false);
+        return ReadFromStreamCore(stream, options ?? ArrowReadOptions.Default);
+    }
+
+    /// <summary>
+    /// Reads an ArrowCollection from the specified byte sequence using Arrow IPC format.
+    /// </summary>
+    /// <param name="data">The byte sequence containing the serialized data.</param>
+    /// <param name="options">Optional read options. If null, default options are used.</param>
+    /// <returns>A new ArrowCollection populated from the serialized data.</returns>
+    /// <remarks>
+    /// This overload is optimized for pipeline scenarios where data arrives as a sequence of segments.
+    /// </remarks>
+    public static ArrowCollection<T> ReadFrom(ReadOnlySequence<byte> data, ArrowReadOptions? options = null)
+    {
+        // Convert sequence to contiguous array for Arrow IPC reader
+        var array = data.ToArray();
+        using var stream = new MemoryStream(array, writable: false);
+        return ReadFromStreamCore(stream, options ?? ArrowReadOptions.Default);
+    }
+
+    /// <summary>
+    /// Asynchronously reads an ArrowCollection from the specified stream using Arrow IPC format.
+    /// </summary>
+    /// <param name="stream">The stream containing the serialized data.</param>
+    /// <param name="options">Optional read options. If null, default options are used.</param>
+    /// <param name="cancellationToken">A cancellation token to observe.</param>
+    /// <returns>A task that represents the asynchronous read operation.</returns>
+    public static async Task<ArrowCollection<T>> ReadFromAsync(Stream stream, ArrowReadOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        return await ReadFromStreamCoreAsync(stream, options ?? ArrowReadOptions.Default, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static ArrowCollection<T> ReadFromStreamCore(Stream stream, ArrowReadOptions options)
+    {
+        using var reader = new ArrowStreamReader(stream, leaveOpen: true);
+        var recordBatch = reader.ReadNextRecordBatch() 
+            ?? throw new InvalidOperationException("No record batch found in the stream.");
+        
+        return CreateFromRecordBatch(recordBatch, options);
+    }
+
+    private static async Task<ArrowCollection<T>> ReadFromStreamCoreAsync(Stream stream, ArrowReadOptions options, CancellationToken cancellationToken)
+    {
+        using var reader = new ArrowStreamReader(stream, leaveOpen: true);
+        var recordBatch = await reader.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("No record batch found in the stream.");
+        
+        return CreateFromRecordBatch(recordBatch, options);
+    }
+
+    private static ArrowCollection<T> CreateFromRecordBatch(RecordBatch recordBatch, ArrowReadOptions options)
+    {
+        if (!ArrowCollectionFactoryRegistry.TryGetDeserializationFactory<T>(out var factory))
+        {
+            throw new InvalidOperationException(
+                $"No deserialization factory registered for type '{typeof(T).FullName}'. " +
+                $"Ensure the type is annotated with [ArrowRecord] and the source generator has run.");
+        }
+
+        return factory!(recordBatch, options);
+    }
+
+    #endregion
+
+    #region Helper Types
+
+    /// <summary>
+    /// A stream wrapper around an IBufferWriter for writing.
+    /// </summary>
+    private sealed class BufferWriterStream(IBufferWriter<byte> writer) : Stream
+    {
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() { }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            var span = writer.GetSpan(count);
+            buffer.AsSpan(offset, count).CopyTo(span);
+            writer.Advance(count);
+        }
+
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            var span = writer.GetSpan(buffer.Length);
+            buffer.CopyTo(span);
+            writer.Advance(buffer.Length);
+        }
+    }
+
+    #endregion
 
     private sealed class ArrowCollectionEnumerator(ArrowCollection<T> collection) : IEnumerator<T>
     {

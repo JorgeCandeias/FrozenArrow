@@ -26,4 +26,14 @@ namespace ArrowCollection;
 [AttributeUsage(AttributeTargets.Property | AttributeTargets.Field, AllowMultiple = false, Inherited = true)]
 public sealed class ArrowArrayAttribute : Attribute
 {
+    /// <summary>
+    /// Gets or sets the column name used for serialization.
+    /// If not specified, the member name is used as-is.
+    /// </summary>
+    /// <remarks>
+    /// This property is particularly important for private fields that follow naming conventions
+    /// (e.g., <c>_fieldName</c>) where you want a clean column name for serialization.
+    /// The specified name is used when writing to and reading from Arrow IPC format.
+    /// </remarks>
+    public string? Name { get; init; }
 }
