@@ -1,4 +1,5 @@
 using Apache.Arrow;
+using System.Buffers;
 using System.Collections;
 
 namespace ArrowCollection;
