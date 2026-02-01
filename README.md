@@ -752,6 +752,96 @@ ArrowCollection/
 - .NET 10.0 or later
 - Apache.Arrow NuGet package (automatically included)
 
+## Benchmarks
+
+The following benchmarks were run on:
+- **OS**: Windows 11
+- **Runtime**: .NET 10.0.2
+- **Benchmark.NET**: v0.14.0
+
+### Memory Footprint Analysis
+
+**Scenario**: 1 million records with 200 columns (sparse wide dataset)
+
+| Storage | Memory Usage | Savings |
+|---------|-------------|---------|
+| `List<T>` | 1,784 MB | — |
+| `ArrowCollection<T>` | 988 MB | **44.6%** |
+
+**Key observations**:
+- ArrowCollection achieves ~45% memory reduction on wide, sparse datasets
+- Dictionary encoding automatically applied to 195 low-cardinality columns
+- Memory savings scale with data redundancy and column count
+
+### Core Performance (Construction & Enumeration)
+
+| Operation | 10K Items | 100K Items | 1M Items |
+|-----------|-----------|------------|----------|
+| **List<T> Construction** | 3.8 μs | 328 μs | 3.5 ms |
+| **ArrowCollection Construction** | 3.2 ms | 37.8 ms | 381 ms |
+| **List<T> Enumeration** | 4.8 μs | 173 μs | 4.4 ms |
+| **ArrowCollection Enumeration** | 1.5 ms | 15.2 ms | 163 ms |
+
+**Key observations**:
+- Construction is ~100x slower due to columnar conversion and compression
+- Enumeration is ~37x slower due to on-the-fly object reconstruction
+- This trade-off is intentional: ArrowCollection is optimized for memory, not speed
+
+### ArrowQuery Performance (Wide Records - 200 Columns)
+
+This benchmark demonstrates the power of column-level filtering on wide tables.
+
+**Scenario**: Filter 10,000 records with 200 columns, ~1% selectivity (highly selective filter)
+
+| Method | Time | Allocated | vs List |
+|--------|------|-----------|---------|
+| `List<T>.Where().ToList()` | 18 μs | 928 B | 1.0x (baseline) |
+| `ArrowQuery.Where().ToList()` | 813 μs | 847 KB | 44x slower |
+| `ArrowCollection.Where().ToList()` | 47,737 μs | 24 MB | **2,593x slower** |
+
+**Key insight**: ArrowQuery is **57x faster** than naive ArrowCollection enumeration because:
+- ArrowQuery scans only 1 column (the filter column)
+- Only matching rows (~1%) are reconstructed
+- ArrowCollection (Enumerable) reconstructs ALL 10,000 rows with ALL 200 columns
+
+### ArrowQuery Performance (Count Operation)
+
+**Scenario**: Count filtered records without materializing objects
+
+| Method | 10K Items | Allocated |
+|--------|-----------|-----------|
+| `List<T>.Where().Count()` | 22 μs | 0 B |
+| `ArrowQuery.Where().Count()` | 98 μs | 36 KB |
+| `ArrowCollection.Where().Count()` | 47,282 μs | 24 MB |
+
+**Key insight**: ArrowQuery Count is **482x faster** than naive enumeration because:
+- Selection bitmap is built from column scan
+- Count is computed from bitmap
+- **Zero object reconstruction!**
+
+### When to Use ArrowQuery
+
+| Scenario | Best Approach | Why |
+|----------|--------------|-----|
+| Highly selective filter (<10% match) | ✅ ArrowQuery | Avoids reconstructing 90%+ of rows |
+| Counting/Any/All | ✅ ArrowQuery | No reconstruction needed |
+| Wide tables (many columns) | ✅ ArrowQuery | Reconstruction cost is high |
+| Low selectivity (>90% match) | ⚠️ List<T> | Reconstruction overhead exceeds benefit |
+| Frequent iteration | ⚠️ List<T> | ArrowCollection optimizes for memory, not speed |
+
+### Running Benchmarks
+
+```bash
+# List all available benchmarks
+dotnet run -c Release --project benchmarks/ArrowCollection.Benchmarks -- --list flat
+
+# Run ArrowQuery benchmarks
+dotnet run -c Release --project benchmarks/ArrowCollection.Benchmarks -- --filter *ArrowQuery*
+
+# Run memory analysis
+dotnet run -c Release --project benchmarks/ArrowCollection.MemoryAnalysis
+```
+
 ## License
 
 See LICENSE file for details.
