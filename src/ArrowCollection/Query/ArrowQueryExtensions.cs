@@ -136,4 +136,57 @@ public static class ArrowQueryExtensions
 
         return query;
     }
+
+    /// <summary>
+    /// Computes multiple aggregates over the query results in a single pass.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This method allows computing multiple aggregate values (Sum, Average, Min, Max, Count)
+    /// in a single pass over the data, which is more efficient than calling each aggregate
+    /// method separately.
+    /// </para>
+    /// <para>
+    /// Example:
+    /// <code>
+    /// var stats = collection
+    ///     .AsQueryable()
+    ///     .Where(x => x.IsActive)
+    ///     .Aggregate(agg => new SalaryStats
+    ///     {
+    ///         TotalSalary = agg.Sum(x => x.Salary),
+    ///         AverageAge = agg.Average(x => x.Age),
+    ///         MinSalary = agg.Min(x => x.Salary),
+    ///         MaxSalary = agg.Max(x => x.Salary),
+    ///         Count = agg.Count()
+    ///     });
+    /// </code>
+    /// </para>
+    /// </remarks>
+    /// <typeparam name="T">The element type of the query.</typeparam>
+    /// <typeparam name="TResult">The result type containing the aggregate values.</typeparam>
+    /// <param name="query">The query to aggregate.</param>
+    /// <param name="aggregateSelector">
+    /// A function that uses the AggregateBuilder to define the aggregates and maps them to a result type.
+    /// </param>
+    /// <returns>An instance of TResult containing all the computed aggregate values.</returns>
+    public static TResult Aggregate<T, TResult>(
+        this IQueryable<T> query,
+        System.Linq.Expressions.Expression<Func<AggregateBuilder<T>, TResult>> aggregateSelector)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentNullException.ThrowIfNull(aggregateSelector);
+
+        if (query is not ArrowQuery<T> arrowQuery)
+        {
+            throw new NotSupportedException("Aggregate is only supported on ArrowQuery<T>.");
+        }
+
+        if (arrowQuery.Provider is not ArrowQueryProvider provider)
+        {
+            throw new NotSupportedException("Aggregate requires ArrowQueryProvider.");
+        }
+
+        return provider.ExecuteMultiAggregate(arrowQuery.Expression, aggregateSelector);
+    }
 }

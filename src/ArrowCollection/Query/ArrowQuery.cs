@@ -346,16 +346,20 @@ public sealed class ArrowQueryProvider : IQueryProvider
              resultType.GetGenericTypeDefinition() == typeof(IQueryable<>)))
         {
             var elementType = resultType.GetGenericArguments()[0];
-            var results = CreateGroupedResultObjects<TKey>(groupedResults, elementType);
+            var results = CreateGroupedResultObjects<TKey>(groupedResults, elementType, plan.GroupByKeyResultPropertyName);
             return (TResult)results;
         }
 
         throw new NotSupportedException($"GroupBy result type '{resultType}' is not supported. Use .ToList() or enumerate the results.");
     }
 
+
+
+
     private static object CreateGroupedResultObjects<TKey>(
         List<GroupedResult<TKey>> groupedResults,
-        Type elementType) where TKey : notnull
+        Type elementType,
+        string keyPropertyName) where TKey : notnull
     {
         // Create a list of the result type
         var listType = typeof(List<>).MakeGenericType(elementType);
@@ -378,7 +382,7 @@ public sealed class ArrowQueryProvider : IQueryProvider
                 for (int i = 0; i < ctorParams.Length; i++)
                 {
                     var paramName = ctorParams[i].Name!;
-                    if (paramName.Equals("Key", StringComparison.OrdinalIgnoreCase))
+                    if (paramName.Equals(keyPropertyName, StringComparison.OrdinalIgnoreCase))
                     {
                         args[i] = group.Key;
                     }
@@ -397,7 +401,7 @@ public sealed class ArrowQueryProvider : IQueryProvider
 
                 foreach (var prop in properties)
                 {
-                    if (prop.Name.Equals("Key", StringComparison.OrdinalIgnoreCase) && prop.CanWrite)
+                    if (prop.Name.Equals(keyPropertyName, StringComparison.OrdinalIgnoreCase) && prop.CanWrite)
                     {
                         prop.SetValue(resultItem, group.Key);
                     }
@@ -430,6 +434,195 @@ public sealed class ArrowQueryProvider : IQueryProvider
         return method.Invoke(this, [selectedIndices])!;
     }
 
+    /// <summary>
+    /// Executes multiple aggregates in a single pass over the data.
+    /// </summary>
+    internal TResult ExecuteMultiAggregate<T, TResult>(
+        Expression queryExpression,
+        System.Linq.Expressions.Expression<Func<AggregateBuilder<T>, TResult>> aggregateSelector)
+    {
+        // Analyze the query to get predicates
+        var plan = AnalyzeExpression(queryExpression);
+
+        if (!plan.IsFullyOptimized && StrictMode)
+        {
+            throw new NotSupportedException(
+                $"Query contains operations that cannot be optimized: {plan.UnsupportedReason}. " +
+                $"Set ArrowQueryProvider.StrictMode = false to allow fallback materialization, " +
+                $"or modify the query to use supported operations.");
+        }
+
+        // Build selection bitmap
+        using var selection = SelectionBitmap.Create(_count, initialValue: true);
+
+        // Apply column predicates
+        foreach (var predicate in plan.ColumnPredicates)
+        {
+            predicate.Evaluate(_recordBatch, ref System.Runtime.CompilerServices.Unsafe.AsRef(in selection));
+        }
+
+        // Parse the aggregate selector to extract aggregations
+        var aggregations = ParseAggregateSelector(aggregateSelector);
+
+        // Execute all aggregates in a single pass
+        var aggregateResults = MultiAggregateExecutor.Execute(
+            _recordBatch,
+            ref System.Runtime.CompilerServices.Unsafe.AsRef(in selection),
+            aggregations,
+            _columnIndexMap);
+
+        // Build the result object
+        return BuildAggregateResult<TResult>(aggregateSelector, aggregateResults);
+    }
+
+    private static List<AggregationDescriptor> ParseAggregateSelector<T, TResult>(
+        System.Linq.Expressions.Expression<Func<AggregateBuilder<T>, TResult>> selector)
+    {
+        // We need to analyze the expression to extract the aggregate calls
+        // The expression is like: agg => new ResultType { Prop1 = agg.Sum(...), Prop2 = agg.Count(), ... }
+        
+        var aggregations = new List<AggregationDescriptor>();
+        var body = selector.Body;
+
+        if (body is MemberInitExpression memberInit)
+        {
+            foreach (var binding in memberInit.Bindings)
+            {
+                if (binding is MemberAssignment assignment)
+                {
+                    var agg = ParseAggregateCall(assignment.Expression, assignment.Member.Name);
+                    if (agg is not null)
+                    {
+                        aggregations.Add(agg);
+                    }
+                }
+            }
+        }
+        else if (body is NewExpression newExpr && newExpr.Members is not null)
+        {
+            for (int i = 0; i < newExpr.Arguments.Count; i++)
+            {
+                var memberName = newExpr.Members[i].Name;
+                var agg = ParseAggregateCall(newExpr.Arguments[i], memberName);
+                if (agg is not null)
+                {
+                    aggregations.Add(agg);
+                }
+            }
+        }
+
+        return aggregations;
+    }
+
+    private static AggregationDescriptor? ParseAggregateCall(Expression expression, string resultPropertyName)
+    {
+        if (expression is not MethodCallExpression methodCall)
+            return null;
+
+        var methodName = methodCall.Method.Name;
+        string? columnName = null;
+
+        // Extract column name from selector argument if present
+        if (methodCall.Arguments.Count >= 1 && methodName != "Count" && methodName != "LongCount")
+        {
+            var selectorArg = methodCall.Arguments[0];
+            if (selectorArg is UnaryExpression unary && unary.Operand is LambdaExpression lambda)
+            {
+                columnName = ExtractColumnNameFromLambda(lambda);
+            }
+            else if (selectorArg is LambdaExpression directLambda)
+            {
+                columnName = ExtractColumnNameFromLambda(directLambda);
+            }
+        }
+
+        var operation = methodName switch
+        {
+            "Sum" => AggregationOperation.Sum,
+            "Average" => AggregationOperation.Average,
+            "Min" => AggregationOperation.Min,
+            "Max" => AggregationOperation.Max,
+            "Count" => AggregationOperation.Count,
+            "LongCount" => AggregationOperation.LongCount,
+            _ => (AggregationOperation?)null
+        };
+
+        if (operation is null)
+            return null;
+
+        return new AggregationDescriptor
+        {
+            Operation = operation.Value,
+            ColumnName = columnName,
+            ResultPropertyName = resultPropertyName
+        };
+    }
+
+    private static string? ExtractColumnNameFromLambda(LambdaExpression lambda)
+    {
+        if (lambda.Body is MemberExpression memberExpr)
+        {
+            return memberExpr.Member.Name;
+        }
+        
+        if (lambda.Body is UnaryExpression unary && unary.Operand is MemberExpression innerMember)
+        {
+            return innerMember.Member.Name;
+        }
+
+        return null;
+    }
+
+    private static TResult BuildAggregateResult<TResult>(
+        LambdaExpression selector,
+        Dictionary<string, object> aggregateResults)
+    {
+        var resultType = typeof(TResult);
+        var body = selector.Body;
+
+        if (body is MemberInitExpression memberInit)
+        {
+            var result = Activator.CreateInstance(resultType)!;
+            
+            foreach (var binding in memberInit.Bindings)
+            {
+                if (binding is MemberAssignment assignment)
+                {
+                    var propertyName = assignment.Member.Name;
+                    if (aggregateResults.TryGetValue(propertyName, out var value))
+                    {
+                        var prop = resultType.GetProperty(propertyName);
+                        if (prop is not null && prop.CanWrite)
+                        {
+                            prop.SetValue(result, Convert.ChangeType(value, prop.PropertyType));
+                        }
+                    }
+                }
+            }
+
+            return (TResult)result;
+        }
+        else if (body is NewExpression newExpr && newExpr.Members is not null)
+        {
+            // Anonymous type - use constructor
+            var constructor = resultType.GetConstructors().First();
+            var ctorParams = constructor.GetParameters();
+            var args = new object?[ctorParams.Length];
+
+            for (int i = 0; i < ctorParams.Length; i++)
+            {
+                var paramName = newExpr.Members[i].Name;
+                if (aggregateResults.TryGetValue(paramName, out var value))
+                {
+                    args[i] = Convert.ChangeType(value, ctorParams[i].ParameterType);
+                }
+            }
+
+            return (TResult)constructor.Invoke(args);
+        }
+
+        throw new NotSupportedException("Aggregate selector must be an object initializer or anonymous type.");
+    }
 
     private static Type? GetElementType(Type type)
     {
@@ -447,6 +640,7 @@ public sealed class ArrowQueryProvider : IQueryProvider
         return null;
     }
 }
+
 
 /// <summary>
 /// Analyzes LINQ expression trees to build a QueryPlan.
@@ -472,8 +666,10 @@ internal sealed class QueryExpressionAnalyzer(Dictionary<string, int> columnInde
         "Sum", "Average", "Min", "Max"
     ];
 
+
     private string? _groupByColumn;
     private Type? _groupByKeyType;
+    private string _groupByKeyResultPropertyName = "Key"; // Default to "Key"
     private readonly List<AggregationDescriptor> _aggregations = [];
     private bool _insideGroupByProjection; // Flag to allow Enumerable methods inside GroupBy projection
 
@@ -493,6 +689,7 @@ internal sealed class QueryExpressionAnalyzer(Dictionary<string, int> columnInde
             SimpleAggregate = _simpleAggregate,
             GroupByColumn = _groupByColumn,
             GroupByKeyType = _groupByKeyType,
+            GroupByKeyResultPropertyName = _groupByKeyResultPropertyName,
             Aggregations = _aggregations,
             EstimatedSelectivity = EstimateSelectivity()
         };
@@ -788,7 +985,8 @@ internal sealed class QueryExpressionAnalyzer(Dictionary<string, int> columnInde
             memberExpr.Expression == groupParam && 
             memberExpr.Member.Name == "Key")
         {
-            // This is the key - already tracked via GroupByColumn
+            // Track the result property name for the key (e.g., "Category" in "Category = g.Key")
+            _groupByKeyResultPropertyName = memberName;
             return;
         }
 

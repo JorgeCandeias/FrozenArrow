@@ -51,6 +51,11 @@ public sealed class QueryPlan
     public bool IsGroupedQuery => GroupByColumn is not null && Aggregations.Count > 0;
 
     /// <summary>
+    /// Gets the result property name for the group key (defaults to "Key" if not specified).
+    /// </summary>
+    public string GroupByKeyResultPropertyName { get; init; } = "Key";
+
+    /// <summary>
     /// Gets the simple aggregate operation (for non-grouped aggregates like Sum, Average, Min, Max).
     /// </summary>
     public SimpleAggregateOperation? SimpleAggregate { get; init; }

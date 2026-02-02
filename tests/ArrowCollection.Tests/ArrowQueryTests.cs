@@ -743,6 +743,7 @@ public class ArrowQueryTests
         Assert.DoesNotContain(results, r => r.Key == "Management");
     }
 
+
     [Fact]
     public void GroupBy_WithMultipleAggregates_ComputesAllAggregates()
     {
@@ -770,6 +771,57 @@ public class ArrowQueryTests
     }
 
     [Fact]
+    public void GroupBy_WithAnonymousType_WorksCorrectly()
+    {
+        // Arrange
+        using var collection = CreateTestCollection();
+
+        // Act - Group with anonymous type projection
+        var results = collection
+            .AsQueryable()
+            .GroupBy(x => x.Category)
+            .Select(g => new { Category = g.Key, Total = g.Sum(x => x.Salary), Count = g.Count() })
+            .ToList();
+
+        // Assert
+        Assert.Equal(4, results.Count);
+
+        // Anonymous type: Category is assigned from g.Key
+        var engineering = results.First(r => r.Category == "Engineering");
+        Assert.Equal(295000m, engineering.Total);
+        Assert.Equal(5, engineering.Count);
+
+        var executive = results.First(r => r.Category == "Executive");
+        Assert.Equal(120000m, executive.Total);
+        Assert.Equal(1, executive.Count);
+    }
+
+    [Fact]
+    public void GroupBy_ByIntegerColumn_WorksCorrectly()
+    {
+        // Arrange
+        using var collection = CreateTestCollection();
+
+        // Act - Group by Age (integer column)
+        var results = collection
+            .AsQueryable()
+            .GroupBy(x => x.Age)
+            .Select(g => new { Age = g.Key, TotalSalary = g.Sum(x => x.Salary), Count = g.Count() })
+            .ToList();
+
+        // Assert - Each person has unique age in test data, so each group has 1 person
+        Assert.Equal(10, results.Count);
+        
+        var age25 = results.First(r => r.Age == 25); // Alice
+        Assert.Equal(50000m, age25.TotalSalary);
+        Assert.Equal(1, age25.Count);
+
+        var age55 = results.First(r => r.Age == 55); // Henry
+        Assert.Equal(120000m, age55.TotalSalary);
+        Assert.Equal(1, age55.Count);
+    }
+
+    [Fact]
     public void GroupBy_Explain_ShowsGroupByInPlan()
     {
         // Arrange
@@ -785,6 +837,174 @@ public class ArrowQueryTests
         // Assert
         Assert.Contains("Optimized: True", plan);
         Assert.Contains("IsActive", plan);
+    }
+
+    #endregion
+
+    #region Multi-Aggregate Tests (Phase 3)
+
+    /// <summary>
+    /// Result type for multi-aggregate tests.
+    /// </summary>
+    public class SalaryStatistics
+    {
+        public decimal TotalSalary { get; set; }
+        public double AverageAge { get; set; }
+        public decimal MinSalary { get; set; }
+        public decimal MaxSalary { get; set; }
+        public int Count { get; set; }
+    }
+
+    [Fact]
+    public void Aggregate_MultipleAggregates_ComputesAllInSinglePass()
+    {
+        // Arrange
+        using var collection = CreateTestCollection();
+
+        // Act - Compute multiple aggregates over all data
+        var stats = collection
+            .AsQueryable()
+            .Aggregate(agg => new SalaryStatistics
+            {
+                TotalSalary = agg.Sum(x => x.Salary),
+                AverageAge = agg.Average(x => x.Age),
+                MinSalary = agg.Min(x => x.Salary),
+                MaxSalary = agg.Max(x => x.Salary),
+                Count = agg.Count()
+            });
+
+        // Assert
+        // All salaries: 50000+75000+90000+55000+65000+80000+60000+120000+45000+70000 = 710000
+        Assert.Equal(710000m, stats.TotalSalary);
+        
+        // All ages: 25+35+45+28+32+40+29+55+23+38 = 350 / 10 = 35.0
+        Assert.Equal(35.0, stats.AverageAge);
+        
+        // Min salary: Ivy(45000)
+        Assert.Equal(45000m, stats.MinSalary);
+        
+        // Max salary: Henry(120000)
+        Assert.Equal(120000m, stats.MaxSalary);
+        
+        // Count: 10 records
+        Assert.Equal(10, stats.Count);
+    }
+
+    [Fact]
+    public void Aggregate_WithFilter_ComputesAggregatesOnFilteredData()
+    {
+        // Arrange
+        using var collection = CreateTestCollection();
+
+        // Act - Compute aggregates over filtered data (active employees only)
+        var stats = collection
+            .AsQueryable()
+            .Where(x => x.IsActive)
+            .Aggregate(agg => new SalaryStatistics
+            {
+                TotalSalary = agg.Sum(x => x.Salary),
+                AverageAge = agg.Average(x => x.Age),
+                MinSalary = agg.Min(x => x.Salary),
+                MaxSalary = agg.Max(x => x.Salary),
+                Count = agg.Count()
+            });
+
+        // Assert
+        // Active employees: Alice, Bob, Diana, Eve, Grace, Henry, Ivy (7)
+        // Active salaries: 50000+75000+55000+65000+60000+120000+45000 = 470000
+        Assert.Equal(470000m, stats.TotalSalary);
+        
+        // Active ages: 25+35+28+32+29+55+23 = 227 / 7 ≈ 32.43
+        Assert.Equal(227.0 / 7.0, stats.AverageAge, precision: 2);
+        
+        // Min active salary: Ivy(45000)
+        Assert.Equal(45000m, stats.MinSalary);
+        
+        // Max active salary: Henry(120000)
+        Assert.Equal(120000m, stats.MaxSalary);
+        
+        // Active count: 7
+        Assert.Equal(7, stats.Count);
+    }
+
+    [Fact]
+    public void Aggregate_WithCategoryFilter_ComputesCorrectly()
+    {
+        // Arrange
+        using var collection = CreateTestCollection();
+
+        // Act - Compute aggregates for Engineering only
+        var stats = collection
+            .AsQueryable()
+            .Where(x => x.Category == "Engineering")
+            .Aggregate(agg => new SalaryStatistics
+            {
+                TotalSalary = agg.Sum(x => x.Salary),
+                AverageAge = agg.Average(x => x.Age),
+                MinSalary = agg.Min(x => x.Salary),
+                MaxSalary = agg.Max(x => x.Salary),
+                Count = agg.Count()
+            });
+
+        // Assert
+        // Engineering: Alice(50000,25), Bob(75000,35), Diana(55000,28), Ivy(45000,23), Jack(70000,38)
+        // Total: 50000+75000+55000+45000+70000 = 295000
+        Assert.Equal(295000m, stats.TotalSalary);
+        
+        // Avg age: (25+35+28+23+38)/5 = 149/5 = 29.8
+        Assert.Equal(29.8, stats.AverageAge, precision: 1);
+        
+        // Min: 45000 (Ivy)
+        Assert.Equal(45000m, stats.MinSalary);
+        
+        // Max: 75000 (Bob)
+        Assert.Equal(75000m, stats.MaxSalary);
+        
+        // Count: 5
+        Assert.Equal(5, stats.Count);
+    }
+
+    [Fact]
+    public void Aggregate_JustCountAndSum_WorksWithPartialAggregates()
+    {
+        // Arrange
+        using var collection = CreateTestCollection();
+
+        // Act - Only compute some aggregates
+        var stats = collection
+            .AsQueryable()
+            .Where(x => x.IsActive)
+            .Aggregate(agg => new { Total = agg.Sum(x => x.Salary), Count = agg.Count() });
+
+        // Assert
+        Assert.Equal(470000m, stats.Total);
+        Assert.Equal(7, stats.Count);
+    }
+
+    [Fact]
+    public void Aggregate_IntegerColumns_ComputesCorrectly()
+    {
+        // Arrange
+        using var collection = CreateTestCollection();
+
+        // Act - Aggregate on integer column (Age)
+        var ageStats = collection
+            .AsQueryable()
+            .Where(x => x.Category == "Engineering")
+            .Aggregate(agg => new
+            {
+                TotalAge = agg.Sum(x => x.Age),
+                MinAge = agg.Min(x => x.Age),
+                MaxAge = agg.Max(x => x.Age),
+                Count = agg.Count()
+            });
+
+        // Assert
+        // Engineering ages: 25, 35, 28, 23, 38 = 149
+        Assert.Equal(149, ageStats.TotalAge);
+        Assert.Equal(23, ageStats.MinAge); // Ivy
+        Assert.Equal(38, ageStats.MaxAge); // Jack
+        Assert.Equal(5, ageStats.Count);
     }
 
     #endregion
