@@ -631,7 +631,80 @@ var results = collection
 | `Take`, `Skip` | ✓ | Pagination support |
 | `OrderBy`, `OrderByDescending` | Partial | Sorts matching results |
 | `Select` | Partial | Column projection |
+| `Sum`, `Average`, `Min`, `Max` | ✓ | Column-level aggregates (no materialization) |
+| `GroupBy` + aggregates | ✓ | Column-level grouping with aggregates |
 | `ToList`, `ToArray` | ✓ | Materializes results |
+
+### Column-Level Aggregations
+
+ArrowQuery can compute aggregates directly on columns without materializing any objects:
+
+```csharp
+// Single aggregate - computed directly on Age column
+var avgAge = collection
+    .AsQueryable()
+    .Where(x => x.IsActive)
+    .Average(x => x.Age);  // No objects created!
+
+// Multiple aggregates in a single pass
+var stats = collection
+    .AsQueryable()
+    .Where(x => x.IsActive)
+    .Aggregate(agg => new
+    {
+        TotalSalary = agg.Sum(x => x.Salary),
+        AverageAge = agg.Average(x => x.Age),
+        MinSalary = agg.Min(x => x.Salary),
+        MaxSalary = agg.Max(x => x.Salary),
+        Count = agg.Count()
+    });
+// All 5 aggregates computed in ONE pass over the data!
+```
+
+### GroupBy with Aggregations
+
+Grouped aggregations are computed at the column level:
+
+```csharp
+// Group by a column and compute aggregates per group
+var summary = collection
+    .AsQueryable()
+    .Where(x => x.IsActive)
+    .GroupBy(x => x.Age)
+    .Select(g => new
+    {
+        Age = g.Key,
+        Count = g.Count(),
+        TotalSalary = g.Sum(x => x.Salary),
+        AvgPerformance = g.Average(x => x.PerformanceScore)
+    })
+    .ToList();
+
+// Also works with concrete result types:
+var results = collection
+    .AsQueryable()
+    .GroupBy(x => x.Category)
+    .Select(g => new CategorySummary
+    {
+        Key = g.Key,
+        Count = g.Count(),
+        TotalSalary = g.Sum(x => x.Salary)
+    })
+    .ToList();
+```
+
+**Supported GroupBy aggregates:**
+- `g.Key` - Group key
+- `g.Count()` / `g.LongCount()` - Count per group
+- `g.Sum(x => x.Column)` - Sum per group
+- `g.Average(x => x.Column)` - Average per group
+- `g.Min(x => x.Column)` - Minimum per group
+- `g.Max(x => x.Column)` - Maximum per group
+
+**Current Limitations:**
+- GroupBy key must be a simple column access (`x => x.Column`)
+- Dictionary-encoded string columns are not yet supported for GroupBy keys
+- Aggregations must reference direct column properties
 
 ### Compile-Time Diagnostics
 
@@ -709,12 +782,15 @@ The source generator and analyzer produce helpful diagnostic messages:
 - **Efficient Serialization**: Arrow IPC format preserves columnar structure for fast I/O
 - **Column-Level Filtering**: Query predicates evaluated on columns, not objects
 - **Selective Materialization**: Only matching rows are converted to objects
+- **Column-Level Aggregates**: Sum, Average, Min, Max computed on columns directly
+- **Single-Pass Multi-Aggregates**: Compute multiple aggregates without multiple iterations
 
 ### Trade-offs
 - **Enumeration Cost**: Items are reconstructed on-the-fly, which is slower than iterating in-memory objects
 - **Not for Frequent Access**: Best suited for scenarios where data is enumerated infrequently but needs to be kept in memory
 - **Construction Cost**: Initial creation requires copying all data into Arrow format
 - **Query Limitations**: Complex predicates may require fallback to row-by-row evaluation
+- **Dictionary-Encoded Columns**: Some operations don't yet support dictionary-encoded string columns
 
 ## Use Cases
 
@@ -728,6 +804,8 @@ ArrowCollection is ideal for:
 - **Cross-language interop** via Arrow IPC format (Python, Rust, Java, etc.)
 - **OLAP-style queries** with efficient column-level filtering
 - **Large dataset filtering** where only a subset of rows match criteria
+- **Aggregate computations** over filtered data without full materialization
+- **GroupBy analytics** with column-level aggregation
 
 ## Project Structure
 
@@ -774,6 +852,7 @@ The following benchmarks were run on:
 - Memory savings scale with data redundancy and column count
 
 ### Core Performance (Construction & Enumeration)
+
 
 | Operation | 10K Items | 100K Items | 1M Items |
 |-----------|-----------|------------|----------|

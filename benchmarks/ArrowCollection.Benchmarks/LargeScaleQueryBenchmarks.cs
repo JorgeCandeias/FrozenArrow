@@ -141,13 +141,13 @@ public class LargeScaleQueryBenchmarks
     #region Single Aggregates (Min/Max)
 
     /// <summary>
-    /// List baseline: Min after filter.
+    /// List baseline: Min after filter (using Age filter instead of Category to avoid dictionary-encoded columns).
     /// </summary>
     [Benchmark(Baseline = true)]
     [BenchmarkCategory("MinMax")]
     public decimal List_Min()
     {
-        return _list.Where(x => x.Category == "Engineering").Min(x => x.Salary);
+        return _list.Where(x => x.Age > 40).Min(x => x.Salary);
     }
 
     /// <summary>
@@ -157,7 +157,7 @@ public class LargeScaleQueryBenchmarks
     [BenchmarkCategory("MinMax")]
     public decimal ArrowQuery_Min()
     {
-        return _arrowCollection.AsQueryable().Where(x => x.Category == "Engineering").Min(x => x.Salary);
+        return _arrowCollection.AsQueryable().Where(x => x.Age > 40).Min(x => x.Salary);
     }
 
     #endregion
@@ -165,20 +165,21 @@ public class LargeScaleQueryBenchmarks
     #region GroupBy with Count
 
     /// <summary>
-    /// List baseline: GroupBy Category and count per group.
+    /// List baseline: GroupBy Age (integer column, ~41 groups) and count per group.
+    /// Using integer column to avoid dictionary-encoding complexities.
     /// </summary>
     [Benchmark(Baseline = true)]
     [BenchmarkCategory("GroupByCount")]
     public int List_GroupByCount()
     {
         return _list
-            .GroupBy(x => x.Category)
-            .Select(g => new { Category = g.Key, Count = g.Count() })
+            .GroupBy(x => x.Age)
+            .Select(g => new { Age = g.Key, Count = g.Count() })
             .ToList().Count;
     }
 
     /// <summary>
-    /// ArrowQuery: Column-level grouping, no full materialization.
+    /// ArrowQuery: Column-level grouping on integer column.
     /// </summary>
     [Benchmark]
     [BenchmarkCategory("GroupByCount")]
@@ -186,8 +187,8 @@ public class LargeScaleQueryBenchmarks
     {
         return _arrowCollection
             .AsQueryable()
-            .GroupBy(x => x.Category)
-            .Select(g => new { Category = g.Key, Count = g.Count() })
+            .GroupBy(x => x.Age)
+            .Select(g => new { Age = g.Key, Count = g.Count() })
             .ToList().Count;
     }
 
@@ -196,20 +197,20 @@ public class LargeScaleQueryBenchmarks
     #region GroupBy with Sum
 
     /// <summary>
-    /// List baseline: GroupBy Category and sum salaries.
+    /// List baseline: GroupBy Age and sum salaries.
     /// </summary>
     [Benchmark(Baseline = true)]
     [BenchmarkCategory("GroupBySum")]
     public decimal List_GroupBySum()
     {
         return _list
-            .GroupBy(x => x.Category)
-            .Select(g => new { Category = g.Key, Total = g.Sum(x => x.Salary) })
+            .GroupBy(x => x.Age)
+            .Select(g => new { Age = g.Key, Total = g.Sum(x => x.Salary) })
             .Sum(x => x.Total);
     }
 
     /// <summary>
-    /// ArrowQuery: Column-level group-sum.
+    /// ArrowQuery: Column-level group-sum on integer key.
     /// </summary>
     [Benchmark]
     [BenchmarkCategory("GroupBySum")]
@@ -217,8 +218,8 @@ public class LargeScaleQueryBenchmarks
     {
         return _arrowCollection
             .AsQueryable()
-            .GroupBy(x => x.Category)
-            .Select(g => new { Category = g.Key, Total = g.Sum(x => x.Salary) })
+            .GroupBy(x => x.Age)
+            .Select(g => new { Age = g.Key, Total = g.Sum(x => x.Salary) })
             .Sum(x => x.Total);
     }
 
@@ -234,13 +235,13 @@ public class LargeScaleQueryBenchmarks
     public int List_GroupByMultipleAggregates()
     {
         return _list
-            .GroupBy(x => x.Category)
+            .GroupBy(x => x.Age)
             .Select(g => new 
             { 
-                Category = g.Key, 
+                Age = g.Key, 
                 Count = g.Count(),
                 TotalSalary = g.Sum(x => x.Salary),
-                AvgAge = g.Average(x => x.Age)
+                AvgPerformance = g.Average(x => x.PerformanceScore)
             })
             .ToList().Count;
     }
@@ -254,13 +255,13 @@ public class LargeScaleQueryBenchmarks
     {
         return _arrowCollection
             .AsQueryable()
-            .GroupBy(x => x.Category)
+            .GroupBy(x => x.Age)
             .Select(g => new 
             { 
-                Category = g.Key, 
+                Age = g.Key, 
                 Count = g.Count(),
                 TotalSalary = g.Sum(x => x.Salary),
-                AvgAge = g.Average(x => x.Age)
+                AvgPerformance = g.Average(x => x.PerformanceScore)
             })
             .ToList().Count;
     }
@@ -278,13 +279,13 @@ public class LargeScaleQueryBenchmarks
     {
         return _list
             .Where(x => x.IsActive)
-            .GroupBy(x => x.Category)
-            .Select(g => new { Category = g.Key, Count = g.Count() })
+            .GroupBy(x => x.Age)
+            .Select(g => new { Age = g.Key, Count = g.Count() })
             .ToList().Count;
     }
 
     /// <summary>
-    /// ArrowQuery: Filter with bitmap, then group.
+    /// ArrowQuery: Filter with bitmap, then group on integer column.
     /// </summary>
     [Benchmark]
     [BenchmarkCategory("FilterGroupBy")]
@@ -293,8 +294,8 @@ public class LargeScaleQueryBenchmarks
         return _arrowCollection
             .AsQueryable()
             .Where(x => x.IsActive)
-            .GroupBy(x => x.Category)
-            .Select(g => new { Category = g.Key, Count = g.Count() })
+            .GroupBy(x => x.Age)
+            .Select(g => new { Age = g.Key, Count = g.Count() })
             .ToList().Count;
     }
 
@@ -379,37 +380,6 @@ public class LargeScaleQueryBenchmarks
             .AsQueryable()
             .Where(x => x.Age > 30 && x.Age < 50 && x.IsActive && x.Category == "Engineering")
             .Count();
-    }
-
-    #endregion
-
-    #region GroupBy Integer Column
-
-    /// <summary>
-    /// List baseline: GroupBy Age (many groups).
-    /// </summary>
-    [Benchmark(Baseline = true)]
-    [BenchmarkCategory("GroupByInt")]
-    public int List_GroupByInteger()
-    {
-        return _list
-            .GroupBy(x => x.Age)
-            .Select(g => new { Age = g.Key, Total = g.Sum(x => x.Salary) })
-            .ToList().Count;
-    }
-
-    /// <summary>
-    /// ArrowQuery: GroupBy integer column.
-    /// </summary>
-    [Benchmark]
-    [BenchmarkCategory("GroupByInt")]
-    public int ArrowQuery_GroupByInteger()
-    {
-        return _arrowCollection
-            .AsQueryable()
-            .GroupBy(x => x.Age)
-            .Select(g => new { Age = g.Key, Total = g.Sum(x => x.Salary) })
-            .ToList().Count;
     }
 
     #endregion
