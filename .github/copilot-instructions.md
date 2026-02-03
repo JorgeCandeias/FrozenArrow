@@ -228,7 +228,8 @@ Include performance numbers in:
 | Optimization Type | Required Scenarios to Test |
 |-------------------|----------------------------|
 | Predicate/Filter optimization | `filter`, `predicate`, `bitmap` |
-| Aggregation optimization | `aggregate`, `fused` |
+| Aggregation optimization | `aggregate`, `fused`, `sparseagg` |
+| Sparse/Block iteration optimization | `sparseagg`, `aggregate`, `bitmap` |
 | GroupBy optimization | `groupby` |
 | Parallelization changes | `parallel`, `all` |
 | General/Unknown impact | `all` |
@@ -239,7 +240,8 @@ Include performance numbers in:
 ? **No unrelated scenarios regress** (>5% slowdown) without justification  
 ? **Memory allocation doesn't increase significantly** (>20%) without reason  
 ? **Improvement is documented** with before/after numbers  
-? **Baseline saved** for future comparisons
+? **Baseline saved** for future comparisons  
+? **Profiling README updated** if new scenario added or significant results changed
 
 ### Red Flags ??
 
@@ -312,12 +314,34 @@ dotnet run -c Release -- -s aggregate -v
 - Document technique and when it applies
 - Include verified performance numbers
 - Add benchmarks for community sharing
+- **Update `profiling/FrozenArrow.Profiling/README.md`** with:
+  - New scenario if one was added (update "Available Scenarios" table)
+  - Updated baseline results if significant changes occurred
+  - New phase breakdown details for affected scenarios
 
 ### Step 8: Baseline Update
 ```
 # Save new baseline for future work
 dotnet run -c Release -- -s all -r 1000000 --save baseline-after-{optimization}.json
 ```
+
+### Step 9: Add New Profiling Scenario (if needed)
+
+When an optimization targets a specific pattern not well-covered by existing scenarios:
+
+1. **Create new scenario** in `profiling/FrozenArrow.Profiling/Scenarios/`
+2. **Register in `Program.cs`**:
+   - Add to `ListScenarios()` help text
+   - Add to scenario switch statement  
+   - Add to `GetAllScenarios()` list
+3. **Update README.md**:
+   - Add to "Available Scenarios" table
+   - Add to "Required Scenarios by Optimization Type" table
+   - Add phase breakdown section with baseline results
+4. **Save baseline** for future comparisons:
+   ```bash
+   dotnet run -c Release -- -s {new-scenario} -r 1000000 --save baselines/baseline-{scenario-name}.json
+   ```
 
 ---
 
