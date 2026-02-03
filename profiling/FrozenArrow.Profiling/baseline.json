@@ -1,0 +1,62 @@
+[
+  {
+    "ScenarioName": "Filter",
+    "Description": "Filter \u002B Count with varying selectivity",
+    "RowCount": 100000,
+    "Iterations": 3,
+    "SamplesMicroseconds": [
+      6853.5,
+      6768.7,
+      7039.9
+    ],
+    "MinMicroseconds": 6768.7,
+    "MaxMicroseconds": 7039.9,
+    "MedianMicroseconds": 6853.5,
+    "AverageMicroseconds": 6887.366666666666,
+    "StdDevMicroseconds": 138.73562387985754,
+    "RowsPerSecond": 14591084.847158385,
+    "MillionRowsPerSecond": 14.591084847158385,
+    "PhaseDetails": {
+      "HighSelectivity": {
+        "PhaseName": "HighSelectivity",
+        "SamplesMicroseconds": [
+          2742.5,
+          2335.4,
+          2374.4
+        ],
+        "AverageMicroseconds": 2484.1,
+        "PercentageOfTotal": 36.06748587994444,
+        "InvocationCount": 1
+      },
+      "LowSelectivity": {
+        "PhaseName": "LowSelectivity",
+        "SamplesMicroseconds": [
+          1269.3,
+          1256.7,
+          1212.8
+        ],
+        "AverageMicroseconds": 1246.2666666666667,
+        "PercentageOfTotal": 18.094966145745108,
+        "InvocationCount": 1
+      },
+      "MultiFilter": {
+        "PhaseName": "MultiFilter",
+        "SamplesMicroseconds": [
+          3248.4,
+          3206.3,
+          3224
+        ],
+        "AverageMicroseconds": 3226.2333333333336,
+        "PercentageOfTotal": 46.84277009597283,
+        "InvocationCount": 1
+      }
+    },
+    "AllocatedBytes": 33034,
+    "Metadata": {
+      "HighSelectivity": "Age \u003E 55 -\u003E 19991 rows",
+      "LowSelectivity": "IsActive -\u003E 69776 rows",
+      "MultiFilter": "Age \u003E 30 \u0026\u0026 IsActive \u0026\u0026 Salary \u003E 50000 -\u003E 46309 rows"
+    },
+    "Timestamp": "2026-02-03T17:46:49.5105052Z"
+  }
+]

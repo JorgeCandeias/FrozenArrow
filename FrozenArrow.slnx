@@ -3,6 +3,9 @@
     <Project Path="benchmarks/FrozenArrow.Benchmarks/FrozenArrow.Benchmarks.csproj" />
     <Project Path="benchmarks/FrozenArrow.MemoryAnalysis/FrozenArrow.MemoryAnalysis.csproj" />
   </Folder>
+  <Folder Name="/profiling/">
+    <Project Path="profiling/FrozenArrow.Profiling/FrozenArrow.Profiling.csproj" />
+  </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/FrozenArrow.Sample/FrozenArrow.Sample.csproj" />
   </Folder>
