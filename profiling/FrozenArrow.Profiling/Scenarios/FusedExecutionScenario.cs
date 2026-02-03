@@ -12,7 +12,6 @@ public sealed class FusedExecutionScenario : BaseScenario
     public override string Description => "Fused filter+aggregate vs separate passes";
 
     private double _fusedResult;
-    private double _separateResult;
     private int _matchCount;
 
     public override object? RunIteration()

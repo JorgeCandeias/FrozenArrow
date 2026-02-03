@@ -434,11 +434,11 @@ public class FrozenArrowStructTests
     [ArrowRecord]
     public struct FieldStruct
     {
-        [ArrowArray]
+        [ArrowArray(Name = "Id")]
         public int Id;
-        [ArrowArray]
+        [ArrowArray(Name = "Name")]
         public string Name;
-        [ArrowArray]
+        [ArrowArray(Name = "Value")]
         public double Value;
     }
 

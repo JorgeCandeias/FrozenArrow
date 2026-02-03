@@ -690,7 +690,8 @@ public sealed class FrozenArrowGenerator : IIncrementalGenerator
         // Use RunLengthEncodedArrayBuilder which handles RLE, dictionary, and primitive arrays
         var getValue = field.UnderlyingTypeName switch
         {
-            "string" => $"global::FrozenArrow.RunLengthEncodedArrayBuilder.GetStringValue({varName}, index)",
+            // String returns string? but we've already checked IsNull, so add ! to suppress nullable warning
+            "string" => $"global::FrozenArrow.RunLengthEncodedArrayBuilder.GetStringValue({varName}, index)!",
             "int" => $"global::FrozenArrow.RunLengthEncodedArrayBuilder.GetInt32Value({varName}, index)",
             "double" => $"global::FrozenArrow.RunLengthEncodedArrayBuilder.GetDoubleValue({varName}, index)",
             "decimal" => $"global::FrozenArrow.RunLengthEncodedArrayBuilder.GetDecimalValue({varName}, index)",
@@ -736,7 +737,8 @@ public sealed class FrozenArrowGenerator : IIncrementalGenerator
         // Use RunLengthEncodedArrayBuilder which handles RLE, dictionary, and primitive arrays
         var getValue = field.UnderlyingTypeName switch
         {
-            "string" => $"global::FrozenArrow.RunLengthEncodedArrayBuilder.GetStringValue({varName}, index)",
+            // String returns string? but we've already checked IsNull, so add ! to suppress nullable warning
+            "string" => $"global::FrozenArrow.RunLengthEncodedArrayBuilder.GetStringValue({varName}, index)!",
             "int" => $"global::FrozenArrow.RunLengthEncodedArrayBuilder.GetInt32Value({varName}, index)",
             "double" => $"global::FrozenArrow.RunLengthEncodedArrayBuilder.GetDoubleValue({varName}, index)",
             "decimal" => $"global::FrozenArrow.RunLengthEncodedArrayBuilder.GetDecimalValue({varName}, index)",

@@ -55,7 +55,7 @@ internal static class ParallelQueryExecutor
     /// <param name="predicates">The predicates to evaluate.</param>
     /// <param name="options">Parallel execution options.</param>
     /// <param name="zoneMap">Optional zone map for skip-scanning optimization.</param>
-    public static unsafe void EvaluatePredicatesParallel(
+    public static void EvaluatePredicatesParallel(
         RecordBatch batch,
         ref SelectionBitmap selection,
         IReadOnlyList<ColumnPredicate> predicates,
@@ -107,12 +107,11 @@ internal static class ParallelQueryExecutor
             }
         }
 
-        // Get a pointer to the selection bitmap.
-        // This is safe because:
-        // 1. The bitmap outlives the parallel operation (it's created in ExecutePlan with 'using')
-        // 2. We write to non-overlapping bit ranges from different threads
-        // 3. The struct remains at the same address during the parallel operation
-        SelectionBitmap* selectionPtr = (SelectionBitmap*)Unsafe.AsPointer(ref selection);
+        // Extract the underlying buffer for safe parallel access.
+        // The buffer (ulong[]) is a reference type that can be safely captured by the lambda.
+        // This avoids taking pointers to managed types which could be invalidated by GC.
+        var selectionBuffer = selection.Buffer!;
+        var selectionLength = selection.Length;
 
         // Process chunks in parallel
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
@@ -124,22 +123,17 @@ internal static class ParallelQueryExecutor
             if (CanSkipChunkViaZoneMap(predicates, zoneMapData, chunkIndex))
             {
                 // Clear the entire chunk using bulk operation - O(chunkSize/64) instead of O(chunkSize)
-                // For 16K chunk: ~256 ulong operations instead of 16,384 bit operations
-                ref var sel = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
-                sel.ClearRange(startRow, endRow);
+                SelectionBitmap.ClearRangeStatic(selectionBuffer, selectionLength, startRow, endRow);
                 return; // Skip chunk evaluation
             }
 
-            // Get a reference to the selection bitmap from the pointer
-            ref var selection = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
-
-            // Apply each predicate to this chunk
+            // Apply each predicate to this chunk using the buffer directly
             for (int predIdx = 0; predIdx < predicates.Count; predIdx++)
             {
                 var predicate = predicates[predIdx];
                 var column = columns[predIdx];
                 
-                predicate.EvaluateRange(column, ref selection, startRow, endRow);
+                predicate.EvaluateRangeWithBuffer(column, selectionBuffer, startRow, endRow);
             }
         });
     }

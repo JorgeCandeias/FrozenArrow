@@ -1,0 +1,9 @@
+<Project>
+  <PropertyGroup>
+    <!-- Treat all warnings as errors to prevent broken window syndrome -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    
+    <!-- Enable nullable reference types across the solution -->
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>

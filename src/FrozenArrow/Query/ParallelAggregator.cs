@@ -1,5 +1,3 @@
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using Apache.Arrow;
 
 namespace FrozenArrow.Query;
@@ -36,7 +34,6 @@ internal static class ParallelAggregator
         var enableParallel = options?.EnableParallelExecution ?? true;
         var threshold = options?.ParallelThreshold ?? ParallelThreshold;
 
-        // Fall back to sequential for small datasets
         if (!enableParallel || length < threshold)
         {
             return ColumnAggregator.ExecuteSum(column, ref selection, resultType);
@@ -48,149 +45,125 @@ internal static class ParallelAggregator
             Int64Array int64Array => ConvertResult(SumInt64Parallel(int64Array, ref selection, options), resultType),
             DoubleArray doubleArray => ConvertResult(SumDoubleParallel(doubleArray, ref selection, options), resultType),
             Decimal128Array decimalArray => ConvertResult(SumDecimalParallel(decimalArray, ref selection, options), resultType),
-            _ => ColumnAggregator.ExecuteSum(column, ref selection, resultType) // Fallback
+            _ => ColumnAggregator.ExecuteSum(column, ref selection, resultType)
         };
     }
 
-    private static unsafe long SumInt32Parallel(Int32Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
+    private static long SumInt32Parallel(Int32Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
     {
         var length = array.Length;
         var chunkSize = options?.ChunkSize ?? DefaultChunkSize;
         var chunkCount = (length + chunkSize - 1) / chunkSize;
         var partialSums = new long[chunkCount];
 
-        // Pin the values buffer and selection for parallel access
-        SelectionBitmap* selectionPtr = (SelectionBitmap*)Unsafe.AsPointer(ref selection);
-        
-        // Get pointer to underlying data
-        ref readonly int valuesRef = ref MemoryMarshal.GetReference(array.Values);
-        int* valuesPtr = (int*)Unsafe.AsPointer(ref Unsafe.AsRef(in valuesRef));
-
+        var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
-            ref var sel = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
+            var values = array.Values; // Get span inside lambda
 
             long chunkSum = 0;
             for (int i = startRow; i < endRow; i++)
             {
-                if (sel[i] && !array.IsNull(i))
+                if (SelectionBitmap.IsSet(selectionBuffer, i) && !array.IsNull(i))
                 {
-                    chunkSum += valuesPtr[i];
+                    chunkSum += values[i];
                 }
             }
             partialSums[chunkIndex] = chunkSum;
         });
 
-        // Reduce: sum all partial sums
         long total = 0;
-        for (int i = 0; i < chunkCount; i++)
-        {
-            total += partialSums[i];
-        }
+        for (int i = 0; i < chunkCount; i++) total += partialSums[i];
         return total;
     }
 
-    private static unsafe long SumInt64Parallel(Int64Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
+    private static long SumInt64Parallel(Int64Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
     {
         var length = array.Length;
         var chunkSize = options?.ChunkSize ?? DefaultChunkSize;
         var chunkCount = (length + chunkSize - 1) / chunkSize;
         var partialSums = new long[chunkCount];
 
-        SelectionBitmap* selectionPtr = (SelectionBitmap*)Unsafe.AsPointer(ref selection);
-        ref readonly long valuesRef = ref MemoryMarshal.GetReference(array.Values);
-        long* valuesPtr = (long*)Unsafe.AsPointer(ref Unsafe.AsRef(in valuesRef));
-
+        var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
-            ref var sel = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
+            var values = array.Values;
 
             long chunkSum = 0;
             for (int i = startRow; i < endRow; i++)
             {
-                if (sel[i] && !array.IsNull(i))
+                if (SelectionBitmap.IsSet(selectionBuffer, i) && !array.IsNull(i))
                 {
-                    chunkSum += valuesPtr[i];
+                    chunkSum += values[i];
                 }
             }
             partialSums[chunkIndex] = chunkSum;
         });
 
         long total = 0;
-        for (int i = 0; i < chunkCount; i++)
-        {
-            total += partialSums[i];
-        }
+        for (int i = 0; i < chunkCount; i++) total += partialSums[i];
         return total;
     }
 
-    private static unsafe double SumDoubleParallel(DoubleArray array, ref SelectionBitmap selection, ParallelQueryOptions? options)
+    private static double SumDoubleParallel(DoubleArray array, ref SelectionBitmap selection, ParallelQueryOptions? options)
     {
         var length = array.Length;
         var chunkSize = options?.ChunkSize ?? DefaultChunkSize;
         var chunkCount = (length + chunkSize - 1) / chunkSize;
         var partialSums = new double[chunkCount];
 
-        SelectionBitmap* selectionPtr = (SelectionBitmap*)Unsafe.AsPointer(ref selection);
-        ref readonly double valuesRef = ref MemoryMarshal.GetReference(array.Values);
-        double* valuesPtr = (double*)Unsafe.AsPointer(ref Unsafe.AsRef(in valuesRef));
-
+        var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
-            ref var sel = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
+            var values = array.Values;
 
             double chunkSum = 0;
             for (int i = startRow; i < endRow; i++)
             {
-                if (sel[i] && !array.IsNull(i))
+                if (SelectionBitmap.IsSet(selectionBuffer, i) && !array.IsNull(i))
                 {
-                    chunkSum += valuesPtr[i];
+                    chunkSum += values[i];
                 }
             }
             partialSums[chunkIndex] = chunkSum;
         });
 
         double total = 0;
-        for (int i = 0; i < chunkCount; i++)
-        {
-            total += partialSums[i];
-        }
+        for (int i = 0; i < chunkCount; i++) total += partialSums[i];
         return total;
     }
 
-    private static unsafe decimal SumDecimalParallel(Decimal128Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
+    private static decimal SumDecimalParallel(Decimal128Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
     {
         var length = array.Length;
         var chunkSize = options?.ChunkSize ?? DefaultChunkSize;
         var chunkCount = (length + chunkSize - 1) / chunkSize;
         var partialSums = new decimal[chunkCount];
 
-        SelectionBitmap* selectionPtr = (SelectionBitmap*)Unsafe.AsPointer(ref selection);
+        var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
 
-        // Decimal128Array doesn't have a simple Values span, so we must use GetValue
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
-            ref var sel = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
 
             decimal chunkSum = 0;
             for (int i = startRow; i < endRow; i++)
             {
-                if (sel[i] && !array.IsNull(i))
+                if (SelectionBitmap.IsSet(selectionBuffer, i) && !array.IsNull(i))
                 {
                     chunkSum += array.GetValue(i)!.Value;
                 }
@@ -199,10 +172,7 @@ internal static class ParallelAggregator
         });
 
         decimal total = 0;
-        for (int i = 0; i < chunkCount; i++)
-        {
-            total += partialSums[i];
-        }
+        for (int i = 0; i < chunkCount; i++) total += partialSums[i];
         return total;
     }
 
@@ -238,7 +208,7 @@ internal static class ParallelAggregator
         };
     }
 
-    private static unsafe double AverageInt32Parallel(Int32Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
+    private static double AverageInt32Parallel(Int32Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
     {
         var length = array.Length;
         var chunkSize = options?.ChunkSize ?? DefaultChunkSize;
@@ -246,70 +216,22 @@ internal static class ParallelAggregator
         var partialSums = new long[chunkCount];
         var partialCounts = new int[chunkCount];
 
-        SelectionBitmap* selectionPtr = (SelectionBitmap*)Unsafe.AsPointer(ref selection);
-        ref readonly int valuesRef = ref MemoryMarshal.GetReference(array.Values);
-        int* valuesPtr = (int*)Unsafe.AsPointer(ref Unsafe.AsRef(in valuesRef));
-
+        var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
-            ref var sel = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
+            var values = array.Values;
 
             long chunkSum = 0;
             int count = 0;
             for (int i = startRow; i < endRow; i++)
             {
-                if (sel[i] && !array.IsNull(i))
+                if (SelectionBitmap.IsSet(selectionBuffer, i) && !array.IsNull(i))
                 {
-                    chunkSum += valuesPtr[i];
-                    count++;
-                }
-            }
-            partialSums[chunkIndex] = chunkSum;
-            partialCounts[chunkIndex] = count;
-        });
-
-        // Reduce
-        long totalSum = 0;
-        int totalCount = 0;
-        for (int i = 0; i < chunkCount; i++)
-        {
-            totalSum += partialSums[i];
-            totalCount += partialCounts[i];
-        }
-        return totalCount > 0 ? (double)totalSum / totalCount : 0;
-    }
-
-    private static unsafe double AverageInt64Parallel(Int64Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
-    {
-        var length = array.Length;
-        var chunkSize = options?.ChunkSize ?? DefaultChunkSize;
-        var chunkCount = (length + chunkSize - 1) / chunkSize;
-        var partialSums = new long[chunkCount];
-        var partialCounts = new int[chunkCount];
-
-        SelectionBitmap* selectionPtr = (SelectionBitmap*)Unsafe.AsPointer(ref selection);
-        ref readonly long valuesRef = ref MemoryMarshal.GetReference(array.Values);
-        long* valuesPtr = (long*)Unsafe.AsPointer(ref Unsafe.AsRef(in valuesRef));
-
-        var parallelOptions = CreateParallelOptions(options);
-
-        Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
-        {
-            var startRow = chunkIndex * chunkSize;
-            var endRow = Math.Min(startRow + chunkSize, length);
-            ref var sel = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
-
-            long chunkSum = 0;
-            int count = 0;
-            for (int i = startRow; i < endRow; i++)
-            {
-                if (sel[i] && !array.IsNull(i))
-                {
-                    chunkSum += valuesPtr[i];
+                    chunkSum += values[i];
                     count++;
                 }
             }
@@ -327,7 +249,48 @@ internal static class ParallelAggregator
         return totalCount > 0 ? (double)totalSum / totalCount : 0;
     }
 
-    private static unsafe double AverageDoubleParallel(DoubleArray array, ref SelectionBitmap selection, ParallelQueryOptions? options)
+    private static double AverageInt64Parallel(Int64Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
+    {
+        var length = array.Length;
+        var chunkSize = options?.ChunkSize ?? DefaultChunkSize;
+        var chunkCount = (length + chunkSize - 1) / chunkSize;
+        var partialSums = new long[chunkCount];
+        var partialCounts = new int[chunkCount];
+
+        var selectionBuffer = selection.Buffer!;
+        var parallelOptions = CreateParallelOptions(options);
+
+        Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
+        {
+            var startRow = chunkIndex * chunkSize;
+            var endRow = Math.Min(startRow + chunkSize, length);
+            var values = array.Values;
+
+            long chunkSum = 0;
+            int count = 0;
+            for (int i = startRow; i < endRow; i++)
+            {
+                if (SelectionBitmap.IsSet(selectionBuffer, i) && !array.IsNull(i))
+                {
+                    chunkSum += values[i];
+                    count++;
+                }
+            }
+            partialSums[chunkIndex] = chunkSum;
+            partialCounts[chunkIndex] = count;
+        });
+
+        long totalSum = 0;
+        int totalCount = 0;
+        for (int i = 0; i < chunkCount; i++)
+        {
+            totalSum += partialSums[i];
+            totalCount += partialCounts[i];
+        }
+        return totalCount > 0 ? (double)totalSum / totalCount : 0;
+    }
+
+    private static double AverageDoubleParallel(DoubleArray array, ref SelectionBitmap selection, ParallelQueryOptions? options)
     {
         var length = array.Length;
         var chunkSize = options?.ChunkSize ?? DefaultChunkSize;
@@ -335,25 +298,22 @@ internal static class ParallelAggregator
         var partialSums = new double[chunkCount];
         var partialCounts = new int[chunkCount];
 
-        SelectionBitmap* selectionPtr = (SelectionBitmap*)Unsafe.AsPointer(ref selection);
-        ref readonly double valuesRef = ref MemoryMarshal.GetReference(array.Values);
-        double* valuesPtr = (double*)Unsafe.AsPointer(ref Unsafe.AsRef(in valuesRef));
-
+        var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
-            ref var sel = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
+            var values = array.Values;
 
             double chunkSum = 0;
             int count = 0;
             for (int i = startRow; i < endRow; i++)
             {
-                if (sel[i] && !array.IsNull(i))
+                if (SelectionBitmap.IsSet(selectionBuffer, i) && !array.IsNull(i))
                 {
-                    chunkSum += valuesPtr[i];
+                    chunkSum += values[i];
                     count++;
                 }
             }
@@ -371,7 +331,7 @@ internal static class ParallelAggregator
         return totalCount > 0 ? totalSum / totalCount : 0;
     }
 
-    private static unsafe decimal AverageDecimalParallel(Decimal128Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
+    private static decimal AverageDecimalParallel(Decimal128Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
     {
         var length = array.Length;
         var chunkSize = options?.ChunkSize ?? DefaultChunkSize;
@@ -379,20 +339,19 @@ internal static class ParallelAggregator
         var partialSums = new decimal[chunkCount];
         var partialCounts = new int[chunkCount];
 
-        SelectionBitmap* selectionPtr = (SelectionBitmap*)Unsafe.AsPointer(ref selection);
+        var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
-            ref var sel = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
 
             decimal chunkSum = 0;
             int count = 0;
             for (int i = startRow; i < endRow; i++)
             {
-                if (sel[i] && !array.IsNull(i))
+                if (SelectionBitmap.IsSet(selectionBuffer, i) && !array.IsNull(i))
                 {
                     chunkSum += array.GetValue(i)!.Value;
                     count++;
@@ -444,7 +403,7 @@ internal static class ParallelAggregator
         };
     }
 
-    private static unsafe int MinInt32Parallel(Int32Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
+    private static int MinInt32Parallel(Int32Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
     {
         var length = array.Length;
         var chunkSize = options?.ChunkSize ?? DefaultChunkSize;
@@ -452,28 +411,24 @@ internal static class ParallelAggregator
         var partialMins = new int[chunkCount];
         var hasValues = new bool[chunkCount];
 
-        // Initialize to max value
         for (int i = 0; i < chunkCount; i++) partialMins[i] = int.MaxValue;
 
-        SelectionBitmap* selectionPtr = (SelectionBitmap*)Unsafe.AsPointer(ref selection);
-        ref readonly int valuesRef = ref MemoryMarshal.GetReference(array.Values);
-        int* valuesPtr = (int*)Unsafe.AsPointer(ref Unsafe.AsRef(in valuesRef));
-
+        var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
-            ref var sel = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
+            var values = array.Values;
 
             int chunkMin = int.MaxValue;
             bool foundValue = false;
             for (int i = startRow; i < endRow; i++)
             {
-                if (sel[i] && !array.IsNull(i))
+                if (SelectionBitmap.IsSet(selectionBuffer, i) && !array.IsNull(i))
                 {
-                    var value = valuesPtr[i];
+                    var value = values[i];
                     if (!foundValue || value < chunkMin)
                     {
                         chunkMin = value;
@@ -485,7 +440,6 @@ internal static class ParallelAggregator
             hasValues[chunkIndex] = foundValue;
         });
 
-        // Reduce: find min of all partial mins
         int globalMin = int.MaxValue;
         bool hasAnyValue = false;
         for (int i = 0; i < chunkCount; i++)
@@ -497,12 +451,11 @@ internal static class ParallelAggregator
             }
         }
 
-        if (!hasAnyValue)
-            throw new InvalidOperationException("Sequence contains no elements.");
+        if (!hasAnyValue) throw new InvalidOperationException("Sequence contains no elements.");
         return globalMin;
     }
 
-    private static unsafe long MinInt64Parallel(Int64Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
+    private static long MinInt64Parallel(Int64Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
     {
         var length = array.Length;
         var chunkSize = options?.ChunkSize ?? DefaultChunkSize;
@@ -512,25 +465,22 @@ internal static class ParallelAggregator
 
         for (int i = 0; i < chunkCount; i++) partialMins[i] = long.MaxValue;
 
-        SelectionBitmap* selectionPtr = (SelectionBitmap*)Unsafe.AsPointer(ref selection);
-        ref readonly long valuesRef = ref MemoryMarshal.GetReference(array.Values);
-        long* valuesPtr = (long*)Unsafe.AsPointer(ref Unsafe.AsRef(in valuesRef));
-
+        var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
-            ref var sel = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
+            var values = array.Values;
 
             long chunkMin = long.MaxValue;
             bool foundValue = false;
             for (int i = startRow; i < endRow; i++)
             {
-                if (sel[i] && !array.IsNull(i))
+                if (SelectionBitmap.IsSet(selectionBuffer, i) && !array.IsNull(i))
                 {
-                    var value = valuesPtr[i];
+                    var value = values[i];
                     if (!foundValue || value < chunkMin)
                     {
                         chunkMin = value;
@@ -553,12 +503,11 @@ internal static class ParallelAggregator
             }
         }
 
-        if (!hasAnyValue)
-            throw new InvalidOperationException("Sequence contains no elements.");
+        if (!hasAnyValue) throw new InvalidOperationException("Sequence contains no elements.");
         return globalMin;
     }
 
-    private static unsafe double MinDoubleParallel(DoubleArray array, ref SelectionBitmap selection, ParallelQueryOptions? options)
+    private static double MinDoubleParallel(DoubleArray array, ref SelectionBitmap selection, ParallelQueryOptions? options)
     {
         var length = array.Length;
         var chunkSize = options?.ChunkSize ?? DefaultChunkSize;
@@ -568,25 +517,22 @@ internal static class ParallelAggregator
 
         for (int i = 0; i < chunkCount; i++) partialMins[i] = double.MaxValue;
 
-        SelectionBitmap* selectionPtr = (SelectionBitmap*)Unsafe.AsPointer(ref selection);
-        ref readonly double valuesRef = ref MemoryMarshal.GetReference(array.Values);
-        double* valuesPtr = (double*)Unsafe.AsPointer(ref Unsafe.AsRef(in valuesRef));
-
+        var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
-            ref var sel = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
+            var values = array.Values;
 
             double chunkMin = double.MaxValue;
             bool foundValue = false;
             for (int i = startRow; i < endRow; i++)
             {
-                if (sel[i] && !array.IsNull(i))
+                if (SelectionBitmap.IsSet(selectionBuffer, i) && !array.IsNull(i))
                 {
-                    var value = valuesPtr[i];
+                    var value = values[i];
                     if (!foundValue || value < chunkMin)
                     {
                         chunkMin = value;
@@ -609,12 +555,11 @@ internal static class ParallelAggregator
             }
         }
 
-        if (!hasAnyValue)
-            throw new InvalidOperationException("Sequence contains no elements.");
+        if (!hasAnyValue) throw new InvalidOperationException("Sequence contains no elements.");
         return globalMin;
     }
 
-    private static unsafe decimal MinDecimalParallel(Decimal128Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
+    private static decimal MinDecimalParallel(Decimal128Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
     {
         var length = array.Length;
         var chunkSize = options?.ChunkSize ?? DefaultChunkSize;
@@ -624,20 +569,19 @@ internal static class ParallelAggregator
 
         for (int i = 0; i < chunkCount; i++) partialMins[i] = decimal.MaxValue;
 
-        SelectionBitmap* selectionPtr = (SelectionBitmap*)Unsafe.AsPointer(ref selection);
+        var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
-            ref var sel = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
 
             decimal chunkMin = decimal.MaxValue;
             bool foundValue = false;
             for (int i = startRow; i < endRow; i++)
             {
-                if (sel[i] && !array.IsNull(i))
+                if (SelectionBitmap.IsSet(selectionBuffer, i) && !array.IsNull(i))
                 {
                     var value = array.GetValue(i)!.Value;
                     if (!foundValue || value < chunkMin)
@@ -662,8 +606,7 @@ internal static class ParallelAggregator
             }
         }
 
-        if (!hasAnyValue)
-            throw new InvalidOperationException("Sequence contains no elements.");
+        if (!hasAnyValue) throw new InvalidOperationException("Sequence contains no elements.");
         return globalMin;
     }
 
@@ -699,7 +642,7 @@ internal static class ParallelAggregator
         };
     }
 
-    private static unsafe int MaxInt32Parallel(Int32Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
+    private static int MaxInt32Parallel(Int32Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
     {
         var length = array.Length;
         var chunkSize = options?.ChunkSize ?? DefaultChunkSize;
@@ -709,25 +652,22 @@ internal static class ParallelAggregator
 
         for (int i = 0; i < chunkCount; i++) partialMaxs[i] = int.MinValue;
 
-        SelectionBitmap* selectionPtr = (SelectionBitmap*)Unsafe.AsPointer(ref selection);
-        ref readonly int valuesRef = ref MemoryMarshal.GetReference(array.Values);
-        int* valuesPtr = (int*)Unsafe.AsPointer(ref Unsafe.AsRef(in valuesRef));
-
+        var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
-            ref var sel = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
+            var values = array.Values;
 
             int chunkMax = int.MinValue;
             bool foundValue = false;
             for (int i = startRow; i < endRow; i++)
             {
-                if (sel[i] && !array.IsNull(i))
+                if (SelectionBitmap.IsSet(selectionBuffer, i) && !array.IsNull(i))
                 {
-                    var value = valuesPtr[i];
+                    var value = values[i];
                     if (!foundValue || value > chunkMax)
                     {
                         chunkMax = value;
@@ -750,12 +690,11 @@ internal static class ParallelAggregator
             }
         }
 
-        if (!hasAnyValue)
-            throw new InvalidOperationException("Sequence contains no elements.");
+        if (!hasAnyValue) throw new InvalidOperationException("Sequence contains no elements.");
         return globalMax;
     }
 
-    private static unsafe long MaxInt64Parallel(Int64Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
+    private static long MaxInt64Parallel(Int64Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
     {
         var length = array.Length;
         var chunkSize = options?.ChunkSize ?? DefaultChunkSize;
@@ -765,25 +704,22 @@ internal static class ParallelAggregator
 
         for (int i = 0; i < chunkCount; i++) partialMaxs[i] = long.MinValue;
 
-        SelectionBitmap* selectionPtr = (SelectionBitmap*)Unsafe.AsPointer(ref selection);
-        ref readonly long valuesRef = ref MemoryMarshal.GetReference(array.Values);
-        long* valuesPtr = (long*)Unsafe.AsPointer(ref Unsafe.AsRef(in valuesRef));
-
+        var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
-            ref var sel = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
+            var values = array.Values;
 
             long chunkMax = long.MinValue;
             bool foundValue = false;
             for (int i = startRow; i < endRow; i++)
             {
-                if (sel[i] && !array.IsNull(i))
+                if (SelectionBitmap.IsSet(selectionBuffer, i) && !array.IsNull(i))
                 {
-                    var value = valuesPtr[i];
+                    var value = values[i];
                     if (!foundValue || value > chunkMax)
                     {
                         chunkMax = value;
@@ -806,12 +742,11 @@ internal static class ParallelAggregator
             }
         }
 
-        if (!hasAnyValue)
-            throw new InvalidOperationException("Sequence contains no elements.");
+        if (!hasAnyValue) throw new InvalidOperationException("Sequence contains no elements.");
         return globalMax;
     }
 
-    private static unsafe double MaxDoubleParallel(DoubleArray array, ref SelectionBitmap selection, ParallelQueryOptions? options)
+    private static double MaxDoubleParallel(DoubleArray array, ref SelectionBitmap selection, ParallelQueryOptions? options)
     {
         var length = array.Length;
         var chunkSize = options?.ChunkSize ?? DefaultChunkSize;
@@ -821,25 +756,22 @@ internal static class ParallelAggregator
 
         for (int i = 0; i < chunkCount; i++) partialMaxs[i] = double.MinValue;
 
-        SelectionBitmap* selectionPtr = (SelectionBitmap*)Unsafe.AsPointer(ref selection);
-        ref readonly double valuesRef = ref MemoryMarshal.GetReference(array.Values);
-        double* valuesPtr = (double*)Unsafe.AsPointer(ref Unsafe.AsRef(in valuesRef));
-
+        var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
-            ref var sel = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
+            var values = array.Values;
 
             double chunkMax = double.MinValue;
             bool foundValue = false;
             for (int i = startRow; i < endRow; i++)
             {
-                if (sel[i] && !array.IsNull(i))
+                if (SelectionBitmap.IsSet(selectionBuffer, i) && !array.IsNull(i))
                 {
-                    var value = valuesPtr[i];
+                    var value = values[i];
                     if (!foundValue || value > chunkMax)
                     {
                         chunkMax = value;
@@ -862,12 +794,11 @@ internal static class ParallelAggregator
             }
         }
 
-        if (!hasAnyValue)
-            throw new InvalidOperationException("Sequence contains no elements.");
+        if (!hasAnyValue) throw new InvalidOperationException("Sequence contains no elements.");
         return globalMax;
     }
 
-    private static unsafe decimal MaxDecimalParallel(Decimal128Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
+    private static decimal MaxDecimalParallel(Decimal128Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
     {
         var length = array.Length;
         var chunkSize = options?.ChunkSize ?? DefaultChunkSize;
@@ -877,20 +808,19 @@ internal static class ParallelAggregator
 
         for (int i = 0; i < chunkCount; i++) partialMaxs[i] = decimal.MinValue;
 
-        SelectionBitmap* selectionPtr = (SelectionBitmap*)Unsafe.AsPointer(ref selection);
+        var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
-            ref var sel = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
 
             decimal chunkMax = decimal.MinValue;
             bool foundValue = false;
             for (int i = startRow; i < endRow; i++)
             {
-                if (sel[i] && !array.IsNull(i))
+                if (SelectionBitmap.IsSet(selectionBuffer, i) && !array.IsNull(i))
                 {
                     var value = array.GetValue(i)!.Value;
                     if (!foundValue || value > chunkMax)
@@ -915,8 +845,7 @@ internal static class ParallelAggregator
             }
         }
 
-        if (!hasAnyValue)
-            throw new InvalidOperationException("Sequence contains no elements.");
+        if (!hasAnyValue) throw new InvalidOperationException("Sequence contains no elements.");
         return globalMax;
     }
 

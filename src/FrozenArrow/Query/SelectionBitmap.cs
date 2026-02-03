@@ -41,6 +41,47 @@ public struct SelectionBitmap : IDisposable
     public readonly Span<ulong> Blocks => _buffer.AsSpan(0, _blockCount);
 
     /// <summary>
+    /// Gets the underlying buffer array for parallel execution scenarios.
+    /// </summary>
+    /// <remarks>
+    /// This provides direct access to the backing array for use in parallel loops where
+    /// Span cannot be captured. The array reference is stable for the lifetime of this
+    /// bitmap and can be safely shared across threads for read operations.
+    /// For write operations, ensure non-overlapping index ranges per thread.
+    /// </remarks>
+    internal readonly ulong[]? Buffer => _buffer;
+
+    /// <summary>
+    /// Gets the number of ulong blocks in the buffer.
+    /// </summary>
+    internal readonly int BlockCount => _blockCount;
+
+    /// <summary>
+    /// Checks if the bit at the specified index is set, using the provided buffer.
+    /// This is a static helper for parallel execution scenarios.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static bool IsSet(ulong[] buffer, int index)
+    {
+        var blockIndex = index >> 6;
+        var bitIndex = index & 63;
+        return (buffer[blockIndex] & (1UL << bitIndex)) != 0;
+    }
+
+    /// <summary>
+    /// Clears the bit at the specified index, using the provided buffer.
+    /// This is a static helper for parallel execution scenarios.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void ClearBit(ulong[] buffer, int index)
+    {
+        var blockIndex = index >> 6;
+        var bitIndex = index & 63;
+        // Note: This is not atomic, but safe when threads operate on non-overlapping ranges
+        buffer[blockIndex] &= ~(1UL << bitIndex);
+    }
+
+    /// <summary>
     /// Creates a new SelectionBitmap with all bits set to the specified initial value.
     /// </summary>
     /// <param name="length">The number of bits in the bitmap.</param>
@@ -676,6 +717,77 @@ public struct SelectionBitmap : IDisposable
         }
 
         // Scalar tail
+        for (; i <= endBlock; i++)
+        {
+            Unsafe.Add(ref bufferRef, i) = 0;
+        }
+    }
+
+    /// <summary>
+    /// Clears all bits in the specified range using the provided buffer.
+    /// This is a static helper for parallel execution scenarios.
+    /// </summary>
+    /// <param name="buffer">The underlying ulong array buffer.</param>
+    /// <param name="bufferLength">The total number of bits the buffer represents.</param>
+    /// <param name="startIndex">The first bit index to clear (inclusive).</param>
+    /// <param name="endIndex">The last bit index (exclusive).</param>
+    /// <remarks>
+    /// Thread-safe for non-overlapping ranges. Uses SIMD when available.
+    /// </remarks>
+    internal static void ClearRangeStatic(ulong[] buffer, int bufferLength, int startIndex, int endIndex)
+    {
+        var blockCount = (bufferLength + 63) >> 6;
+        if (startIndex >= endIndex || blockCount == 0)
+            return;
+
+        startIndex = Math.Max(0, startIndex);
+        endIndex = Math.Min(bufferLength, endIndex);
+
+        var startBlock = startIndex >> 6;
+        var endBlock = (endIndex - 1) >> 6;
+        var startBit = startIndex & 63;
+        var endBit = (endIndex - 1) & 63;
+
+        ref var bufferRef = ref buffer[0];
+
+        if (startBlock == endBlock)
+        {
+            var bitsToKeep = ~(((1UL << (endBit - startBit + 1)) - 1) << startBit);
+            Unsafe.Add(ref bufferRef, startBlock) &= bitsToKeep;
+            return;
+        }
+
+        if (startBit > 0)
+        {
+            var keepMask = (1UL << startBit) - 1;
+            Unsafe.Add(ref bufferRef, startBlock) &= keepMask;
+            startBlock++;
+        }
+
+        if (endBit < 63)
+        {
+            var keepMask = ~((1UL << (endBit + 1)) - 1);
+            Unsafe.Add(ref bufferRef, endBlock) &= keepMask;
+            endBlock--;
+        }
+
+        var fullBlockCount = endBlock - startBlock + 1;
+        if (fullBlockCount <= 0)
+            return;
+
+        int i = startBlock;
+
+        if (Vector256.IsHardwareAccelerated && fullBlockCount >= Vector256ULongCount)
+        {
+            var zero = Vector256<ulong>.Zero;
+            var vectorEnd = startBlock + fullBlockCount - (fullBlockCount % Vector256ULongCount);
+            
+            for (; i < vectorEnd; i += Vector256ULongCount)
+            {
+                Vector256.StoreUnsafe(zero, ref Unsafe.Add(ref bufferRef, i));
+            }
+        }
+
         for (; i <= endBlock; i++)
         {
             Unsafe.Add(ref bufferRef, i) = 0;

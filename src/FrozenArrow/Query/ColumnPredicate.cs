@@ -77,6 +77,32 @@ public abstract class ColumnPredicate
     }
 
     /// <summary>
+    /// Evaluates this predicate for a range of rows using the raw selection buffer.
+    /// This overload is used for parallel execution where we cannot capture ref structs.
+    /// </summary>
+    /// <param name="column">The column to evaluate against.</param>
+    /// <param name="selectionBuffer">The raw ulong array backing the selection bitmap.</param>
+    /// <param name="startIndex">The first row index (inclusive).</param>
+    /// <param name="endIndex">The last row index (exclusive).</param>
+    /// <remarks>
+    /// Thread-safe for non-overlapping ranges. Uses the static helpers in SelectionBitmap
+    /// for bit manipulation without needing a ref to the struct.
+    /// </remarks>
+    public virtual void EvaluateRangeWithBuffer(IArrowArray column, ulong[] selectionBuffer, int startIndex, int endIndex)
+    {
+        // Default implementation: iterate and update bitmap using static helpers
+        for (int i = startIndex; i < endIndex; i++)
+        {
+            if (!SelectionBitmap.IsSet(selectionBuffer, i)) continue; // Already filtered out
+            
+            if (!EvaluateSingle(column, i))
+            {
+                SelectionBitmap.ClearBit(selectionBuffer, i);
+            }
+        }
+    }
+
+    /// <summary>
     /// Evaluates this predicate for a single row.
     /// Override in subclasses for optimized bitmap evaluation.
     /// </summary>
@@ -1006,6 +1032,11 @@ public sealed class StringOperationPredicate : ColumnPredicate
             }
 
             var columnValue = RunLengthEncodedArrayBuilder.GetStringValue(column, i);
+            if (columnValue is null)
+            {
+                selection[i] = false;
+                continue;
+            }
             selection[i] = Operation switch
             {
                 StringOperation.Contains => columnValue.Contains(Pattern, Comparison),
@@ -1020,6 +1051,7 @@ public sealed class StringOperationPredicate : ColumnPredicate
     {
         if (column.IsNull(index)) return false;
         var columnValue = RunLengthEncodedArrayBuilder.GetStringValue(column, index);
+        if (columnValue is null) return false;
         return Operation switch
         {
             StringOperation.Contains => columnValue.Contains(Pattern, Comparison),
