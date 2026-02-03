@@ -6,10 +6,15 @@ using DuckDB.NET.Data;
 namespace FrozenArrow.Benchmarks;
 
 /// <summary>
-/// Benchmarks comparing FrozenArrow query performance against in-process DuckDB.
+/// Comprehensive benchmarks comparing FrozenArrow ArrowQuery performance against in-process DuckDB.
 /// 
-/// This helps identify scenarios where FrozenArrow excels (simple filters, aggregations,
-/// low memory overhead) vs where DuckDB has advantages (complex GROUP BY, query optimizer).
+/// Covers all ArrowQuery supported operations:
+/// - Where (various selectivities)
+/// - Count, Any, All
+/// - Sum, Average, Min, Max
+/// - GroupBy with aggregates
+/// - First, Take, Skip
+/// - ToList materialization
 /// </summary>
 [MemoryDiagnoser]
 [Orderer(SummaryOrderPolicy.FastestToSlowest)]
@@ -22,7 +27,7 @@ public class DuckDbComparisonBenchmarks
     private FrozenArrow<QueryBenchmarkItem> _frozenArrow = null!;
     private DuckDBConnection _duckDbConnection = null!;
 
-    [Params(100_000)]
+    [Params(100_000, 1_000_000)]
     public int ItemCount { get; set; }
 
     [GlobalSetup]
@@ -79,25 +84,25 @@ public class DuckDbComparisonBenchmarks
         _duckDbConnection.Dispose();
     }
 
-    #region High Selectivity Filter (~5% match) - FrozenArrow expected to win
+    #region Where + Count (High Selectivity ~5%)
 
     [Benchmark(Baseline = true)]
-    [BenchmarkCategory("HighSelectivity_Count")]
-    public int List_HighSelectivity_Count()
+    [BenchmarkCategory("Count_HighSelectivity")]
+    public int List_Count_HighSelectivity()
     {
         return _list.Where(x => x.Age > 55).Count();
     }
 
     [Benchmark]
-    [BenchmarkCategory("HighSelectivity_Count")]
-    public int FrozenArrow_HighSelectivity_Count()
+    [BenchmarkCategory("Count_HighSelectivity")]
+    public int FrozenArrow_Count_HighSelectivity()
     {
         return _frozenArrow.AsQueryable().Where(x => x.Age > 55).Count();
     }
 
     [Benchmark]
-    [BenchmarkCategory("HighSelectivity_Count")]
-    public int DuckDb_HighSelectivity_Count()
+    [BenchmarkCategory("Count_HighSelectivity")]
+    public int DuckDb_Count_HighSelectivity()
     {
         using var cmd = _duckDbConnection.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM benchmark_items WHERE Age > 55";
@@ -106,55 +111,82 @@ public class DuckDbComparisonBenchmarks
 
     #endregion
 
-    #region Medium Selectivity Filter (~30% match)
+    #region Where + Count (Low Selectivity ~70%)
 
     [Benchmark(Baseline = true)]
-    [BenchmarkCategory("MediumSelectivity_Count")]
-    public int List_MediumSelectivity_Count()
-    {
-        return _list.Where(x => x.Age > 40).Count();
-    }
-
-    [Benchmark]
-    [BenchmarkCategory("MediumSelectivity_Count")]
-    public int FrozenArrow_MediumSelectivity_Count()
-    {
-        return _frozenArrow.AsQueryable().Where(x => x.Age > 40).Count();
-    }
-
-    [Benchmark]
-    [BenchmarkCategory("MediumSelectivity_Count")]
-    public int DuckDb_MediumSelectivity_Count()
-    {
-        using var cmd = _duckDbConnection.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM benchmark_items WHERE Age > 40";
-        return Convert.ToInt32(cmd.ExecuteScalar());
-    }
-
-    #endregion
-
-    #region Low Selectivity Filter (~70% match) - DuckDB may catch up
-
-    [Benchmark(Baseline = true)]
-    [BenchmarkCategory("LowSelectivity_Count")]
-    public int List_LowSelectivity_Count()
+    [BenchmarkCategory("Count_LowSelectivity")]
+    public int List_Count_LowSelectivity()
     {
         return _list.Where(x => x.IsActive).Count();
     }
 
     [Benchmark]
-    [BenchmarkCategory("LowSelectivity_Count")]
-    public int FrozenArrow_LowSelectivity_Count()
+    [BenchmarkCategory("Count_LowSelectivity")]
+    public int FrozenArrow_Count_LowSelectivity()
     {
         return _frozenArrow.AsQueryable().Where(x => x.IsActive).Count();
     }
 
     [Benchmark]
-    [BenchmarkCategory("LowSelectivity_Count")]
-    public int DuckDb_LowSelectivity_Count()
+    [BenchmarkCategory("Count_LowSelectivity")]
+    public int DuckDb_Count_LowSelectivity()
     {
         using var cmd = _duckDbConnection.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM benchmark_items WHERE IsActive = true";
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    #endregion
+
+    #region Any (Short-circuit evaluation)
+
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Any")]
+    public bool List_Any()
+    {
+        return _list.Any(x => x.Age > 55 && x.Category == "Executive");
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("Any")]
+    public bool FrozenArrow_Any()
+    {
+        return _frozenArrow.AsQueryable().Any(x => x.Age > 55 && x.Category == "Executive");
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("Any")]
+    public bool DuckDb_Any()
+    {
+        using var cmd = _duckDbConnection.CreateCommand();
+        cmd.CommandText = "SELECT EXISTS(SELECT 1 FROM benchmark_items WHERE Age > 55 AND Category = 'Executive')";
+        return Convert.ToBoolean(cmd.ExecuteScalar());
+    }
+
+    #endregion
+
+    #region First (Stop at first match)
+
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("First")]
+    public int List_First()
+    {
+        return _list.First(x => x.Age > 55).Id;
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("First")]
+    public int FrozenArrow_First()
+    {
+        return _frozenArrow.AsQueryable().First(x => x.Age > 55).Id;
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("First")]
+    public int DuckDb_First()
+    {
+        using var cmd = _duckDbConnection.CreateCommand();
+        cmd.CommandText = "SELECT Id FROM benchmark_items WHERE Age > 55 LIMIT 1";
         return Convert.ToInt32(cmd.ExecuteScalar());
     }
 
@@ -193,14 +225,14 @@ public class DuckDbComparisonBenchmarks
     [BenchmarkCategory("Average")]
     public double List_Average()
     {
-        return _list.Where(x => x.Age > 40).Average(x => x.Age);
+        return _list.Where(x => x.Age > 30).Average(x => x.PerformanceScore);
     }
 
     [Benchmark]
     [BenchmarkCategory("Average")]
     public double FrozenArrow_Average()
     {
-        return _frozenArrow.AsQueryable().Where(x => x.Age > 40).Average(x => x.Age);
+        return _frozenArrow.AsQueryable().Where(x => x.Age > 30).Average(x => x.PerformanceScore);
     }
 
     [Benchmark]
@@ -208,36 +240,40 @@ public class DuckDbComparisonBenchmarks
     public double DuckDb_Average()
     {
         using var cmd = _duckDbConnection.CreateCommand();
-        cmd.CommandText = "SELECT AVG(Age) FROM benchmark_items WHERE Age > 40";
+        cmd.CommandText = "SELECT AVG(PerformanceScore) FROM benchmark_items WHERE Age > 30";
         return Convert.ToDouble(cmd.ExecuteScalar());
     }
 
     #endregion
 
-    #region Min/Max Aggregation
+    #region Min Aggregation
 
     [Benchmark(Baseline = true)]
-    [BenchmarkCategory("MinMax")]
+    [BenchmarkCategory("Min")]
     public decimal List_Min()
     {
         return _list.Where(x => x.Age > 40).Min(x => x.Salary);
     }
 
     [Benchmark]
-    [BenchmarkCategory("MinMax")]
+    [BenchmarkCategory("Min")]
     public decimal FrozenArrow_Min()
     {
         return _frozenArrow.AsQueryable().Where(x => x.Age > 40).Min(x => x.Salary);
     }
 
     [Benchmark]
-    [BenchmarkCategory("MinMax")]
+    [BenchmarkCategory("Min")]
     public decimal DuckDb_Min()
     {
         using var cmd = _duckDbConnection.CreateCommand();
         cmd.CommandText = "SELECT MIN(Salary) FROM benchmark_items WHERE Age > 40";
         return Convert.ToDecimal(cmd.ExecuteScalar());
     }
+
+    #endregion
+
+    #region Max Aggregation
 
     [Benchmark(Baseline = true)]
     [BenchmarkCategory("Max")]
@@ -264,7 +300,44 @@ public class DuckDbComparisonBenchmarks
 
     #endregion
 
-    #region GroupBy with Aggregation - DuckDB's strength
+    #region GroupBy + Count
+
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("GroupBy_Count")]
+    public Dictionary<string, int> List_GroupBy_Count()
+    {
+        return _list
+            .GroupBy(x => x.Category)
+            .ToDictionary(g => g.Key, g => g.Count());
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("GroupBy_Count")]
+    public Dictionary<string, int> FrozenArrow_GroupBy_Count()
+    {
+        return _frozenArrow.AsQueryable()
+            .GroupBy(x => x.Category)
+            .ToDictionary(g => g.Key, g => g.Count());
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("GroupBy_Count")]
+    public Dictionary<string, int> DuckDb_GroupBy_Count()
+    {
+        var result = new Dictionary<string, int>();
+        using var cmd = _duckDbConnection.CreateCommand();
+        cmd.CommandText = "SELECT Category, COUNT(*) FROM benchmark_items GROUP BY Category";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            result[reader.GetString(0)] = Convert.ToInt32(reader.GetInt64(1));
+        }
+        return result;
+    }
+
+    #endregion
+
+    #region GroupBy + Sum
 
     [Benchmark(Baseline = true)]
     [BenchmarkCategory("GroupBy_Sum")]
@@ -301,37 +374,98 @@ public class DuckDbComparisonBenchmarks
 
     #endregion
 
-    #region GroupBy with Multiple Aggregations
+    #region GroupBy + Average
 
     [Benchmark(Baseline = true)]
-    [BenchmarkCategory("GroupBy_MultiAgg")]
-    public Dictionary<string, (decimal Sum, double Avg, int Count)> List_GroupBy_MultiAgg()
+    [BenchmarkCategory("GroupBy_Average")]
+    public Dictionary<string, double> List_GroupBy_Average()
     {
         return _list
-            .GroupBy(x => x.Category)
-            .ToDictionary(
-                g => g.Key,
-                g => (g.Sum(x => x.Salary), g.Average(x => x.Age), g.Count()));
+            .GroupBy(x => x.Department)
+            .ToDictionary(g => g.Key, g => g.Average(x => x.PerformanceScore));
     }
 
     [Benchmark]
-    [BenchmarkCategory("GroupBy_MultiAgg")]
-    public Dictionary<string, (decimal Sum, double Avg, int Count)> DuckDb_GroupBy_MultiAgg()
+    [BenchmarkCategory("GroupBy_Average")]
+    public Dictionary<string, double> FrozenArrow_GroupBy_Average()
     {
-        var result = new Dictionary<string, (decimal Sum, double Avg, int Count)>();
+        return _frozenArrow.AsQueryable()
+            .GroupBy(x => x.Department)
+            .ToDictionary(g => g.Key, g => g.Average(x => x.PerformanceScore));
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("GroupBy_Average")]
+    public Dictionary<string, double> DuckDb_GroupBy_Average()
+    {
+        var result = new Dictionary<string, double>();
         using var cmd = _duckDbConnection.CreateCommand();
-        cmd.CommandText = "SELECT Category, SUM(Salary), AVG(Age), COUNT(*) FROM benchmark_items GROUP BY Category";
+        cmd.CommandText = "SELECT Department, AVG(PerformanceScore) FROM benchmark_items GROUP BY Department";
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
-            result[reader.GetString(0)] = (reader.GetDecimal(1), reader.GetDouble(2), reader.GetInt32(3));
+            result[reader.GetString(0)] = reader.GetDouble(1);
         }
         return result;
     }
 
     #endregion
 
-    #region Compound Filter (AND conditions)
+    #region Take (Pagination)
+
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("Take")]
+    public int List_Take()
+    {
+        return _list.Where(x => x.IsActive).Take(100).Count();
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("Take")]
+    public int FrozenArrow_Take()
+    {
+        return _frozenArrow.AsQueryable().Where(x => x.IsActive).Take(100).Count();
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("Take")]
+    public int DuckDb_Take()
+    {
+        using var cmd = _duckDbConnection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM (SELECT 1 FROM benchmark_items WHERE IsActive = true LIMIT 100)";
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    #endregion
+
+    #region Skip + Take (Pagination)
+
+    [Benchmark(Baseline = true)]
+    [BenchmarkCategory("SkipTake")]
+    public int List_SkipTake()
+    {
+        return _list.Where(x => x.IsActive).Skip(1000).Take(100).Count();
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("SkipTake")]
+    public int FrozenArrow_SkipTake()
+    {
+        return _frozenArrow.AsQueryable().Where(x => x.IsActive).Skip(1000).Take(100).Count();
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("SkipTake")]
+    public int DuckDb_SkipTake()
+    {
+        using var cmd = _duckDbConnection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM (SELECT 1 FROM benchmark_items WHERE IsActive = true LIMIT 100 OFFSET 1000)";
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    #endregion
+
+    #region Compound Filter (Multiple AND conditions)
 
     [Benchmark(Baseline = true)]
     [BenchmarkCategory("CompoundFilter")]
@@ -360,25 +494,25 @@ public class DuckDbComparisonBenchmarks
 
     #endregion
 
-    #region String Equality Filter (Dictionary-encoded advantage)
+    #region String Equality Filter
 
     [Benchmark(Baseline = true)]
-    [BenchmarkCategory("StringFilter")]
-    public int List_StringFilter()
+    [BenchmarkCategory("StringEquality")]
+    public int List_StringEquality()
     {
         return _list.Where(x => x.Category == "Engineering").Count();
     }
 
     [Benchmark]
-    [BenchmarkCategory("StringFilter")]
-    public int FrozenArrow_StringFilter()
+    [BenchmarkCategory("StringEquality")]
+    public int FrozenArrow_StringEquality()
     {
         return _frozenArrow.AsQueryable().Where(x => x.Category == "Engineering").Count();
     }
 
     [Benchmark]
-    [BenchmarkCategory("StringFilter")]
-    public int DuckDb_StringFilter()
+    [BenchmarkCategory("StringEquality")]
+    public int DuckDb_StringEquality()
     {
         using var cmd = _duckDbConnection.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM benchmark_items WHERE Category = 'Engineering'";
@@ -387,25 +521,25 @@ public class DuckDbComparisonBenchmarks
 
     #endregion
 
-    #region Filter + Materialize (ToList)
+    #region Filter + ToList (Full Materialization)
 
     [Benchmark(Baseline = true)]
-    [BenchmarkCategory("FilterToList")]
-    public int List_FilterToList()
+    [BenchmarkCategory("ToList")]
+    public int List_ToList()
     {
         return _list.Where(x => x.Age > 55).ToList().Count;
     }
 
     [Benchmark]
-    [BenchmarkCategory("FilterToList")]
-    public int FrozenArrow_FilterToList()
+    [BenchmarkCategory("ToList")]
+    public int FrozenArrow_ToList()
     {
         return _frozenArrow.AsQueryable().Where(x => x.Age > 55).ToList().Count;
     }
 
     [Benchmark]
-    [BenchmarkCategory("FilterToList")]
-    public int DuckDb_FilterToList()
+    [BenchmarkCategory("ToList")]
+    public int DuckDb_ToList()
     {
         var results = new List<QueryBenchmarkItem>();
         using var cmd = _duckDbConnection.CreateCommand();
@@ -432,3 +566,4 @@ public class DuckDbComparisonBenchmarks
 
     #endregion
 }
+
