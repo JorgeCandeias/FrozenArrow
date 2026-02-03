@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using Apache.Arrow;
 
 namespace FrozenArrow.Query;
@@ -239,8 +240,62 @@ public sealed class Int32ComparisonPredicate : ColumnPredicate
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ApplyMaskToBitmap(Vector256<int> mask, ref SelectionBitmap selection, int startIndex, bool hasNulls, ReadOnlySpan<byte> nullBitmap)
     {
-        // Extract each element and apply to bitmap
-        // This is the "scatter" operation - unfortunately no single instruction for this
+        // Use MoveMask to convert SIMD mask to 8-bit mask in a single instruction
+        // MoveMask extracts the high bit of each 32-bit element (8 elements -> 8 bits)
+        // Since comparison produces 0xFFFFFFFF for true, the high bit is 1 for matches
+        if (Avx2.IsSupported)
+        {
+            // Convert int32 mask to byte mask using MoveMask
+            var floatMask = mask.AsSingle();
+            var byteMask = (byte)Avx.MoveMask(floatMask);
+            
+            // Handle nulls by clearing those bits from the mask
+            if (hasNulls)
+            {
+                byteMask = ApplyNullMaskVectorized(byteMask, nullBitmap, startIndex);
+            }
+            
+            // Apply the mask - this ANDs with existing selection automatically
+            selection.AndMask8(startIndex, byteMask);
+        }
+        else
+        {
+            // Scalar fallback
+            ApplyMaskToBitmapScalar(mask, ref selection, startIndex, hasNulls, nullBitmap);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static byte ApplyNullMaskVectorized(byte mask, ReadOnlySpan<byte> nullBitmap, int startIndex)
+    {
+        // Extract 8 bits from the Arrow null bitmap
+        // Arrow uses LSB first: bit 0 of byte 0 = index 0
+        // Null bitmap: 1 = valid, 0 = null
+        var byteIndex = startIndex >> 3;  // startIndex / 8
+        var bitOffset = startIndex & 7;   // startIndex % 8
+        
+        byte nullMask;
+        if (bitOffset == 0)
+        {
+            // Aligned case: can read directly
+            nullMask = byteIndex < nullBitmap.Length ? nullBitmap[byteIndex] : (byte)0xFF;
+        }
+        else
+        {
+            // Unaligned: need to combine two bytes
+            var lowByte = byteIndex < nullBitmap.Length ? nullBitmap[byteIndex] : (byte)0xFF;
+            var highByte = (byteIndex + 1) < nullBitmap.Length ? nullBitmap[byteIndex + 1] : (byte)0xFF;
+            nullMask = (byte)((lowByte >> bitOffset) | (highByte << (8 - bitOffset)));
+        }
+        
+        // AND the masks together: keep bits that are both matched and non-null
+        return (byte)(mask & nullMask);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ApplyMaskToBitmapScalar(Vector256<int> mask, ref SelectionBitmap selection, int startIndex, bool hasNulls, ReadOnlySpan<byte> nullBitmap)
+    {
+        // Scalar fallback for non-AVX2 systems
         for (int j = 0; j < 8; j++)
         {
             var idx = startIndex + j;
@@ -252,7 +307,6 @@ public sealed class Int32ComparisonPredicate : ColumnPredicate
                 continue;
             }
             
-            // mask[j] is 0xFFFFFFFF if true, 0x00000000 if false
             if (mask.GetElement(j) == 0)
             {
                 selection.Clear(idx);
@@ -512,24 +566,65 @@ public sealed class DoubleComparisonPredicate : ColumnPredicate
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ApplyDoubleMaskToBitmap(Vector256<double> mask, ref SelectionBitmap selection, int startIndex, bool hasNulls, ReadOnlySpan<byte> nullBitmap)
     {
-        // Extract each element and apply to bitmap (4 doubles)
-        for (int j = 0; j < 4; j++)
+        // Use MoveMask to convert SIMD mask to 4-bit mask
+        // For doubles, we get 4 bits (one per 64-bit element)
+        if (Avx.IsSupported)
         {
-            var idx = startIndex + j;
-            if (!selection[idx]) continue;
+            var byteMask = (byte)Avx.MoveMask(mask);
             
-            if (hasNulls && IsNull(nullBitmap, idx))
+            // Handle nulls - extract 4 bits from Arrow null bitmap
+            if (hasNulls)
             {
-                selection.Clear(idx);
-                continue;
+                byteMask = ApplyNullMask4Vectorized(byteMask, nullBitmap, startIndex);
             }
             
-            // mask[j] is all 1s if true, all 0s if false (as a double bit pattern)
-            if (BitConverter.DoubleToInt64Bits(mask.GetElement(j)) == 0)
+            // Apply the 4-bit mask - AndMask4 automatically ANDs with existing
+            selection.AndMask4(startIndex, byteMask);
+        }
+        else
+        {
+            // Scalar fallback
+            for (int j = 0; j < 4; j++)
             {
-                selection.Clear(idx);
+                var idx = startIndex + j;
+                if (!selection[idx]) continue;
+                
+                if (hasNulls && IsNull(nullBitmap, idx))
+                {
+                    selection.Clear(idx);
+                    continue;
+                }
+                
+                if (BitConverter.DoubleToInt64Bits(mask.GetElement(j)) == 0)
+                {
+                    selection.Clear(idx);
+                }
             }
         }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static byte ApplyNullMask4Vectorized(byte mask, ReadOnlySpan<byte> nullBitmap, int startIndex)
+    {
+        // Extract 4 bits from the Arrow null bitmap
+        var byteIndex = startIndex >> 3;
+        var bitOffset = startIndex & 7;
+        
+        byte nullMask;
+        if (bitOffset <= 4)
+        {
+            // Can get all 4 bits from one byte
+            nullMask = byteIndex < nullBitmap.Length ? (byte)(nullBitmap[byteIndex] >> bitOffset) : (byte)0x0F;
+        }
+        else
+        {
+            // Need to combine two bytes
+            var lowByte = byteIndex < nullBitmap.Length ? nullBitmap[byteIndex] : (byte)0xFF;
+            var highByte = (byteIndex + 1) < nullBitmap.Length ? nullBitmap[byteIndex + 1] : (byte)0xFF;
+            nullMask = (byte)((lowByte >> bitOffset) | (highByte << (8 - bitOffset)));
+        }
+        
+        return (byte)(mask & (nullMask & 0x0F));
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

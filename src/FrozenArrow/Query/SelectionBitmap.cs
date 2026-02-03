@@ -519,6 +519,66 @@ public struct SelectionBitmap : IDisposable
     public readonly SelectedIndicesEnumerator GetSelectedIndices() => new(this);
 
     /// <summary>
+    /// Applies a bitmask to 8 consecutive bits starting at the specified index.
+    /// The mask is an 8-bit value where each bit corresponds to a row.
+    /// A 0 bit in the mask clears the corresponding selection bit.
+    /// </summary>
+    /// <param name="startIndex">The starting bit index (must be 8-aligned for best performance).</param>
+    /// <param name="mask">8-bit mask where 1 = keep selected, 0 = deselect.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void ApplyMask8(int startIndex, byte mask)
+    {
+        // Calculate which ulong block and bit position within it
+        var blockIndex = startIndex >> 6;  // startIndex / 64
+        var bitOffset = startIndex & 63;   // startIndex % 64
+        
+        // Create a mask with bits to keep: invert the comparison mask then AND with existing bits
+        // Actually, we want to AND with the mask (keep bits where mask is 1)
+        var ulongMask = (ulong)mask << bitOffset;
+        
+        // We need to clear bits where mask is 0, but only in the range [startIndex, startIndex+8)
+        // So we create a "clear mask" for those 8 bits
+        var clearMask = (ulong)0xFF << bitOffset;  // Bits we're operating on
+        
+        // Clear the 8 bits, then set only where mask indicates
+        _buffer![blockIndex] = (_buffer[blockIndex] & ~clearMask) | (_buffer[blockIndex] & ulongMask);
+    }
+
+    /// <summary>
+    /// Applies a bitmask to 8 consecutive bits, ANDing with the existing selection.
+    /// This is the common case: clear bits where the predicate result is false.
+    /// </summary>
+    /// <param name="startIndex">The starting bit index (must be 8-aligned for best performance).</param>
+    /// <param name="mask">8-bit mask where 1 = keep current, 0 = force clear.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void AndMask8(int startIndex, byte mask)
+    {
+        var blockIndex = startIndex >> 6;
+        var bitOffset = startIndex & 63;
+        
+        // Create inverse clear mask: 1s everywhere except where we want to potentially clear
+        var preserveMask = ~((ulong)0xFF << bitOffset);  // Bits outside our range are preserved
+        var andMask = (ulong)mask << bitOffset;          // The actual mask for our 8 bits
+        
+        _buffer![blockIndex] = (_buffer[blockIndex] & preserveMask) | (_buffer[blockIndex] & andMask);
+    }
+
+    /// <summary>
+    /// Applies a 4-bit mask to 4 consecutive bits (used for double comparisons with AVX2).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void AndMask4(int startIndex, byte mask)
+    {
+        var blockIndex = startIndex >> 6;
+        var bitOffset = startIndex & 63;
+        
+        var preserveMask = ~((ulong)0x0F << bitOffset);
+        var andMask = (ulong)(mask & 0x0F) << bitOffset;
+        
+        _buffer![blockIndex] = (_buffer[blockIndex] & preserveMask) | (_buffer[blockIndex] & andMask);
+    }
+
+    /// <summary>
     /// Disposes the bitmap and returns the buffer to the pool.
     /// </summary>
     public void Dispose()
