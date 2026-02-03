@@ -11,7 +11,7 @@ Benchmarks are organized **by operation type**, not by technology. All competing
 1. **No `Baseline = true` markers** - Let results rank naturally by speed
 2. **All technologies compete in the same file** - Easy comparison
 3. **Consistent naming**: `{Technology}_{Operation}` (e.g., `List_Filter_Count`, `FrozenArrow_Filter_Count`)
-4. **Consistent scale params** - Use `[Params(100_000, 1_000_000)]` for standard benchmarks
+4. **Consistent scale params** - Use `[Params(10_000, 100_000, 1_000_000)]` for all benchmarks
 5. **ShortRunJob for all** - Fast iteration during development
 
 ## Benchmark Files

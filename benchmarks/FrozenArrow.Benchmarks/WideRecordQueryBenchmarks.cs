@@ -20,9 +20,9 @@ public class WideRecordQueryBenchmarks
     private FrozenArrow<HeavyBenchmarkItem> _FrozenArrow = null!;
 
     /// <summary>
-    /// Smaller counts due to wide record size and benchmark time.
+    /// Standard item counts for benchmarking.
     /// </summary>
-    [Params(1_000, 10_000)]
+    [Params(10_000, 100_000, 1_000_000)]
     public int ItemCount { get; set; }
 
     [GlobalSetup]

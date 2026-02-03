@@ -10,7 +10,7 @@ Memory analysis is organized **by model type**, not by technology. All competing
 
 1. **All technologies compete together** - Easy side-by-side comparison
 2. **Consistent measurement approach** - Uses `Process.PrivateMemorySize64` for both managed and native memory
-3. **Multiple scenarios** - Standard model (7 columns) and wide model (200 columns)
+3. **Standard item counts** - Use 10K, 100K, 1M for standard model; 1M for wide model
 
 ## Analysis Files
 

@@ -18,7 +18,7 @@ public class PredicateEvaluationBenchmarks
     private List<QueryBenchmarkItem> _list = null!;
     private FrozenArrow<QueryBenchmarkItem> _frozenArrow = null!;
 
-    [Params(100_000, 1_000_000)]
+    [Params(10_000, 100_000, 1_000_000)]
     public int ItemCount { get; set; }
 
     [GlobalSetup]

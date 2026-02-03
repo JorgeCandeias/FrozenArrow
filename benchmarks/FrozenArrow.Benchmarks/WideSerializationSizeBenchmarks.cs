@@ -22,7 +22,7 @@ public class WideSerializationSizeBenchmarks
     private ArrowWriteOptions _lz4Compression = null!;
     private ArrowWriteOptions _zstdCompression = null!;
 
-    [Params(100_000, 1_000_000)]
+    [Params(10_000, 100_000, 1_000_000)]
     public int ItemCount { get; set; }
 
     [GlobalSetup]

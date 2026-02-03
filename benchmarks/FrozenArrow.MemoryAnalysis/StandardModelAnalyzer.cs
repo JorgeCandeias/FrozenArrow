@@ -50,7 +50,7 @@ public static class StandardModelAnalyzer
 
     private static void RunStaticMemoryComparison()
     {
-        var itemCounts = new[] { 10_000, 100_000, 500_000, 1_000_000 };
+        var itemCounts = new[] { 10_000, 100_000, 1_000_000 };
 
         Console.WriteLine($"{"Items",-12} {"List<T>",-12} {"FrozenArrow",-12} {"DuckDB",-12} {"FA vs List",-15} {"FA vs Duck",-15}");
         Console.WriteLine(new string('-', 78));
