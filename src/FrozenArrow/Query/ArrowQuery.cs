@@ -317,7 +317,8 @@ public sealed class ArrowQueryProvider : IQueryProvider
             plan.ColumnPredicates,
             plan.SimpleAggregate!,
             _columnIndexMap,
-            ParallelOptions);
+            ParallelOptions,
+            _zoneMap);
 
         return (TResult)result;
     }

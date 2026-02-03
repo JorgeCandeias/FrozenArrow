@@ -58,12 +58,19 @@ internal static class FusedAggregator
     /// <summary>
     /// Executes a fused filter+aggregate operation in a single pass.
     /// </summary>
+    /// <param name="batch">The Arrow record batch to process.</param>
+    /// <param name="predicates">The predicates to evaluate.</param>
+    /// <param name="aggregate">The aggregation operation to perform.</param>
+    /// <param name="columnIndexMap">Map of column names to indices.</param>
+    /// <param name="options">Parallel execution options.</param>
+    /// <param name="zoneMap">Optional zone map for skip-scanning optimization.</param>
     public static object ExecuteFused(
         RecordBatch batch,
         IReadOnlyList<ColumnPredicate> predicates,
         SimpleAggregateOperation aggregate,
         Dictionary<string, int> columnIndexMap,
-        ParallelQueryOptions? options = null)
+        ParallelQueryOptions? options = null,
+        ZoneMap? zoneMap = null)
     {
         // Get the aggregate column
         var aggregateColumnIndex = aggregate.ColumnName is not null && columnIndexMap.TryGetValue(aggregate.ColumnName, out var idx)
@@ -79,6 +86,16 @@ internal static class FusedAggregator
             predicateColumns[i] = batch.Column(predicates[i].ColumnIndex);
         }
 
+        // Pre-fetch zone map data for predicates (enables chunk skipping)
+        var zoneMapData = new ColumnZoneMapData?[predicates.Count];
+        if (zoneMap != null)
+        {
+            for (int i = 0; i < predicates.Count; i++)
+            {
+                zoneMap.TryGetColumnZoneMap(predicates[i].ColumnName, out zoneMapData[i]);
+            }
+        }
+
         var rowCount = batch.Length;
         var enableParallel = options?.EnableParallelExecution ?? true;
         var threshold = options?.ParallelThreshold ?? 50_000;
@@ -86,7 +103,7 @@ internal static class FusedAggregator
         // Choose parallel or sequential based on size
         if (enableParallel && rowCount >= threshold)
         {
-            return ExecuteFusedParallel(predicates, predicateColumns, aggregate, aggregateColumn, rowCount, options);
+            return ExecuteFusedParallel(predicates, predicateColumns, aggregate, aggregateColumn, rowCount, options, zoneMapData);
         }
 
         return ExecuteFusedSequential(predicates, predicateColumns, aggregate, aggregateColumn, rowCount);
@@ -116,6 +133,7 @@ internal static class FusedAggregator
 
     /// <summary>
     /// Parallel fused execution - partitions data and executes fused operations per chunk.
+    /// Uses zone maps to skip entire chunks that cannot contain matching rows.
     /// </summary>
     private static object ExecuteFusedParallel(
         IReadOnlyList<ColumnPredicate> predicates,
@@ -123,7 +141,8 @@ internal static class FusedAggregator
         SimpleAggregateOperation aggregate,
         IArrowArray? aggregateColumn,
         int rowCount,
-        ParallelQueryOptions? options)
+        ParallelQueryOptions? options,
+        ColumnZoneMapData?[] zoneMapData)
     {
         var chunkSize = options?.ChunkSize ?? 65_536;
         var chunkCount = (rowCount + chunkSize - 1) / chunkSize;
@@ -136,14 +155,35 @@ internal static class FusedAggregator
 
         return aggregate.Operation switch
         {
-            AggregationOperation.Count => FusedCountParallel(predicates, predicateColumns, rowCount, chunkSize, chunkCount, parallelOptions),
-            AggregationOperation.LongCount => (long)FusedCountParallel(predicates, predicateColumns, rowCount, chunkSize, chunkCount, parallelOptions),
-            AggregationOperation.Sum => FusedSumParallel(predicates, predicateColumns, aggregateColumn!, rowCount, chunkSize, chunkCount, parallelOptions, aggregate.ResultType),
-            AggregationOperation.Average => FusedAverageParallel(predicates, predicateColumns, aggregateColumn!, rowCount, chunkSize, chunkCount, parallelOptions, aggregate.ResultType),
-            AggregationOperation.Min => FusedMinParallel(predicates, predicateColumns, aggregateColumn!, rowCount, chunkSize, chunkCount, parallelOptions, aggregate.ResultType),
-            AggregationOperation.Max => FusedMaxParallel(predicates, predicateColumns, aggregateColumn!, rowCount, chunkSize, chunkCount, parallelOptions, aggregate.ResultType),
+            AggregationOperation.Count => FusedCountParallel(predicates, predicateColumns, rowCount, chunkSize, chunkCount, parallelOptions, zoneMapData),
+            AggregationOperation.LongCount => (long)FusedCountParallel(predicates, predicateColumns, rowCount, chunkSize, chunkCount, parallelOptions, zoneMapData),
+            AggregationOperation.Sum => FusedSumParallel(predicates, predicateColumns, aggregateColumn!, rowCount, chunkSize, chunkCount, parallelOptions, aggregate.ResultType, zoneMapData),
+            AggregationOperation.Average => FusedAverageParallel(predicates, predicateColumns, aggregateColumn!, rowCount, chunkSize, chunkCount, parallelOptions, aggregate.ResultType, zoneMapData),
+            AggregationOperation.Min => FusedMinParallel(predicates, predicateColumns, aggregateColumn!, rowCount, chunkSize, chunkCount, parallelOptions, aggregate.ResultType, zoneMapData),
+            AggregationOperation.Max => FusedMaxParallel(predicates, predicateColumns, aggregateColumn!, rowCount, chunkSize, chunkCount, parallelOptions, aggregate.ResultType, zoneMapData),
             _ => throw new NotSupportedException($"Fused parallel execution not supported for {aggregate.Operation}")
         };
+    }
+
+    /// <summary>
+    /// Checks if a chunk can be skipped based on zone maps.
+    /// Returns true only if at least one predicate definitively excludes the chunk.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool CanSkipChunkViaZoneMap(
+        IReadOnlyList<ColumnPredicate> predicates,
+        ColumnZoneMapData?[] zoneMapData,
+        int chunkIndex)
+    {
+        // A chunk can be skipped if ANY predicate says it cannot possibly contain matches
+        for (int i = 0; i < predicates.Count; i++)
+        {
+            if (!predicates[i].MayContainMatches(zoneMapData[i], chunkIndex))
+            {
+                return true; // This predicate excludes the chunk
+            }
+        }
+        return false; // All predicates might have matches, must evaluate
     }
 
     #region Fused Count
@@ -172,12 +212,20 @@ internal static class FusedAggregator
         int rowCount,
         int chunkSize,
         int chunkCount,
-        ParallelOptions parallelOptions)
+        ParallelOptions parallelOptions,
+        ColumnZoneMapData?[] zoneMapData)
     {
         var partialCounts = new int[chunkCount];
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
+            // Zone map optimization: skip chunks that cannot contain matches
+            if (CanSkipChunkViaZoneMap(predicates, zoneMapData, chunkIndex))
+            {
+                partialCounts[chunkIndex] = 0;
+                return;
+            }
+
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, rowCount);
             int localCount = 0;
@@ -309,14 +357,15 @@ internal static class FusedAggregator
         int chunkSize,
         int chunkCount,
         ParallelOptions parallelOptions,
-        Type resultType)
+        Type resultType,
+        ColumnZoneMapData?[] zoneMapData)
     {
         return aggregateColumn switch
         {
-            Int32Array int32Array => ConvertResult(FusedSumInt32Parallel(predicates, predicateColumns, int32Array, rowCount, chunkSize, chunkCount, parallelOptions), resultType),
-            Int64Array int64Array => ConvertResult(FusedSumInt64Parallel(predicates, predicateColumns, int64Array, rowCount, chunkSize, chunkCount, parallelOptions), resultType),
-            DoubleArray doubleArray => ConvertResult(FusedSumDoubleParallel(predicates, predicateColumns, doubleArray, rowCount, chunkSize, chunkCount, parallelOptions), resultType),
-            Decimal128Array decimalArray => ConvertResult(FusedSumDecimalParallel(predicates, predicateColumns, decimalArray, rowCount, chunkSize, chunkCount, parallelOptions), resultType),
+            Int32Array int32Array => ConvertResult(FusedSumInt32Parallel(predicates, predicateColumns, int32Array, rowCount, chunkSize, chunkCount, parallelOptions, zoneMapData), resultType),
+            Int64Array int64Array => ConvertResult(FusedSumInt64Parallel(predicates, predicateColumns, int64Array, rowCount, chunkSize, chunkCount, parallelOptions, zoneMapData), resultType),
+            DoubleArray doubleArray => ConvertResult(FusedSumDoubleParallel(predicates, predicateColumns, doubleArray, rowCount, chunkSize, chunkCount, parallelOptions, zoneMapData), resultType),
+            Decimal128Array decimalArray => ConvertResult(FusedSumDecimalParallel(predicates, predicateColumns, decimalArray, rowCount, chunkSize, chunkCount, parallelOptions, zoneMapData), resultType),
             _ => throw new NotSupportedException($"Fused parallel Sum not supported for {aggregateColumn.GetType().Name}")
         };
     }
@@ -328,7 +377,8 @@ internal static class FusedAggregator
         int rowCount,
         int chunkSize,
         int chunkCount,
-        ParallelOptions parallelOptions)
+        ParallelOptions parallelOptions,
+        ColumnZoneMapData?[] zoneMapData)
     {
         var partialSums = new long[chunkCount];
         ref readonly int valuesRef = ref MemoryMarshal.GetReference(valueArray.Values);
@@ -336,6 +386,13 @@ internal static class FusedAggregator
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
+            // Zone map optimization: skip chunks that cannot contain matches
+            if (CanSkipChunkViaZoneMap(predicates, zoneMapData, chunkIndex))
+            {
+                partialSums[chunkIndex] = 0;
+                return;
+            }
+
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, rowCount);
             long localSum = 0;
@@ -366,7 +423,8 @@ internal static class FusedAggregator
         int rowCount,
         int chunkSize,
         int chunkCount,
-        ParallelOptions parallelOptions)
+        ParallelOptions parallelOptions,
+        ColumnZoneMapData?[] zoneMapData)
     {
         var partialSums = new long[chunkCount];
         ref readonly long valuesRef = ref MemoryMarshal.GetReference(valueArray.Values);
@@ -374,6 +432,13 @@ internal static class FusedAggregator
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
+            // Zone map optimization: skip chunks that cannot contain matches
+            if (CanSkipChunkViaZoneMap(predicates, zoneMapData, chunkIndex))
+            {
+                partialSums[chunkIndex] = 0;
+                return;
+            }
+
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, rowCount);
             long localSum = 0;
@@ -404,7 +469,8 @@ internal static class FusedAggregator
         int rowCount,
         int chunkSize,
         int chunkCount,
-        ParallelOptions parallelOptions)
+        ParallelOptions parallelOptions,
+        ColumnZoneMapData?[] zoneMapData)
     {
         var partialSums = new double[chunkCount];
         ref readonly double valuesRef = ref MemoryMarshal.GetReference(valueArray.Values);
@@ -412,6 +478,13 @@ internal static class FusedAggregator
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
+            // Zone map optimization: skip chunks that cannot contain matches
+            if (CanSkipChunkViaZoneMap(predicates, zoneMapData, chunkIndex))
+            {
+                partialSums[chunkIndex] = 0;
+                return;
+            }
+
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, rowCount);
             double localSum = 0;
@@ -442,12 +515,20 @@ internal static class FusedAggregator
         int rowCount,
         int chunkSize,
         int chunkCount,
-        ParallelOptions parallelOptions)
+        ParallelOptions parallelOptions,
+        ColumnZoneMapData?[] zoneMapData)
     {
         var partialSums = new decimal[chunkCount];
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
+            // Zone map optimization: skip chunks that cannot contain matches
+            if (CanSkipChunkViaZoneMap(predicates, zoneMapData, chunkIndex))
+            {
+                partialSums[chunkIndex] = 0;
+                return;
+            }
+
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, rowCount);
             decimal localSum = 0;
@@ -587,14 +668,15 @@ internal static class FusedAggregator
         int chunkSize,
         int chunkCount,
         ParallelOptions parallelOptions,
-        Type resultType)
+        Type resultType,
+        ColumnZoneMapData?[] zoneMapData)
     {
         return aggregateColumn switch
         {
-            Int32Array int32Array => ConvertResult(FusedAverageInt32Parallel(predicates, predicateColumns, int32Array, rowCount, chunkSize, chunkCount, parallelOptions), resultType),
-            Int64Array int64Array => ConvertResult(FusedAverageInt64Parallel(predicates, predicateColumns, int64Array, rowCount, chunkSize, chunkCount, parallelOptions), resultType),
-            DoubleArray doubleArray => ConvertResult(FusedAverageDoubleParallel(predicates, predicateColumns, doubleArray, rowCount, chunkSize, chunkCount, parallelOptions), resultType),
-            Decimal128Array decimalArray => ConvertResult(FusedAverageDecimalParallel(predicates, predicateColumns, decimalArray, rowCount, chunkSize, chunkCount, parallelOptions), resultType),
+            Int32Array int32Array => ConvertResult(FusedAverageInt32Parallel(predicates, predicateColumns, int32Array, rowCount, chunkSize, chunkCount, parallelOptions, zoneMapData), resultType),
+            Int64Array int64Array => ConvertResult(FusedAverageInt64Parallel(predicates, predicateColumns, int64Array, rowCount, chunkSize, chunkCount, parallelOptions, zoneMapData), resultType),
+            DoubleArray doubleArray => ConvertResult(FusedAverageDoubleParallel(predicates, predicateColumns, doubleArray, rowCount, chunkSize, chunkCount, parallelOptions, zoneMapData), resultType),
+            Decimal128Array decimalArray => ConvertResult(FusedAverageDecimalParallel(predicates, predicateColumns, decimalArray, rowCount, chunkSize, chunkCount, parallelOptions, zoneMapData), resultType),
             _ => throw new NotSupportedException($"Fused parallel Average not supported for {aggregateColumn.GetType().Name}")
         };
     }
@@ -606,7 +688,8 @@ internal static class FusedAggregator
         int rowCount,
         int chunkSize,
         int chunkCount,
-        ParallelOptions parallelOptions)
+        ParallelOptions parallelOptions,
+        ColumnZoneMapData?[] zoneMapData)
     {
         var partialSums = new long[chunkCount];
         var partialCounts = new int[chunkCount];
@@ -615,6 +698,14 @@ internal static class FusedAggregator
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
+            // Zone map optimization: skip chunks that cannot contain matches
+            if (CanSkipChunkViaZoneMap(predicates, zoneMapData, chunkIndex))
+            {
+                partialSums[chunkIndex] = 0;
+                partialCounts[chunkIndex] = 0;
+                return;
+            }
+
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, rowCount);
             long localSum = 0;
@@ -650,7 +741,8 @@ internal static class FusedAggregator
         int rowCount,
         int chunkSize,
         int chunkCount,
-        ParallelOptions parallelOptions)
+        ParallelOptions parallelOptions,
+        ColumnZoneMapData?[] zoneMapData)
     {
         var partialSums = new long[chunkCount];
         var partialCounts = new int[chunkCount];
@@ -659,6 +751,14 @@ internal static class FusedAggregator
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
+            // Zone map optimization: skip chunks that cannot contain matches
+            if (CanSkipChunkViaZoneMap(predicates, zoneMapData, chunkIndex))
+            {
+                partialSums[chunkIndex] = 0;
+                partialCounts[chunkIndex] = 0;
+                return;
+            }
+
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, rowCount);
             long localSum = 0;
@@ -694,7 +794,8 @@ internal static class FusedAggregator
         int rowCount,
         int chunkSize,
         int chunkCount,
-        ParallelOptions parallelOptions)
+        ParallelOptions parallelOptions,
+        ColumnZoneMapData?[] zoneMapData)
     {
         var partialSums = new double[chunkCount];
         var partialCounts = new int[chunkCount];
@@ -703,6 +804,14 @@ internal static class FusedAggregator
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
+            // Zone map optimization: skip chunks that cannot contain matches
+            if (CanSkipChunkViaZoneMap(predicates, zoneMapData, chunkIndex))
+            {
+                partialSums[chunkIndex] = 0;
+                partialCounts[chunkIndex] = 0;
+                return;
+            }
+
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, rowCount);
             double localSum = 0;
@@ -738,13 +847,22 @@ internal static class FusedAggregator
         int rowCount,
         int chunkSize,
         int chunkCount,
-        ParallelOptions parallelOptions)
+        ParallelOptions parallelOptions,
+        ColumnZoneMapData?[] zoneMapData)
     {
         var partialSums = new decimal[chunkCount];
         var partialCounts = new int[chunkCount];
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
+            // Zone map optimization: skip chunks that cannot contain matches
+            if (CanSkipChunkViaZoneMap(predicates, zoneMapData, chunkIndex))
+            {
+                partialSums[chunkIndex] = 0;
+                partialCounts[chunkIndex] = 0;
+                return;
+            }
+
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, rowCount);
             decimal localSum = 0;
@@ -913,14 +1031,15 @@ internal static class FusedAggregator
         int chunkSize,
         int chunkCount,
         ParallelOptions parallelOptions,
-        Type resultType)
+        Type resultType,
+        ColumnZoneMapData?[] zoneMapData)
     {
         return aggregateColumn switch
         {
-            Int32Array int32Array => ConvertResult(FusedMinInt32Parallel(predicates, predicateColumns, int32Array, rowCount, chunkSize, chunkCount, parallelOptions), resultType),
-            Int64Array int64Array => ConvertResult(FusedMinInt64Parallel(predicates, predicateColumns, int64Array, rowCount, chunkSize, chunkCount, parallelOptions), resultType),
-            DoubleArray doubleArray => ConvertResult(FusedMinDoubleParallel(predicates, predicateColumns, doubleArray, rowCount, chunkSize, chunkCount, parallelOptions), resultType),
-            Decimal128Array decimalArray => ConvertResult(FusedMinDecimalParallel(predicates, predicateColumns, decimalArray, rowCount, chunkSize, chunkCount, parallelOptions), resultType),
+            Int32Array int32Array => ConvertResult(FusedMinInt32Parallel(predicates, predicateColumns, int32Array, rowCount, chunkSize, chunkCount, parallelOptions, zoneMapData), resultType),
+            Int64Array int64Array => ConvertResult(FusedMinInt64Parallel(predicates, predicateColumns, int64Array, rowCount, chunkSize, chunkCount, parallelOptions, zoneMapData), resultType),
+            DoubleArray doubleArray => ConvertResult(FusedMinDoubleParallel(predicates, predicateColumns, doubleArray, rowCount, chunkSize, chunkCount, parallelOptions, zoneMapData), resultType),
+            Decimal128Array decimalArray => ConvertResult(FusedMinDecimalParallel(predicates, predicateColumns, decimalArray, rowCount, chunkSize, chunkCount, parallelOptions, zoneMapData), resultType),
             _ => throw new NotSupportedException($"Fused parallel Min not supported for {aggregateColumn.GetType().Name}")
         };
     }
@@ -932,7 +1051,8 @@ internal static class FusedAggregator
         int rowCount,
         int chunkSize,
         int chunkCount,
-        ParallelOptions parallelOptions)
+        ParallelOptions parallelOptions,
+        ColumnZoneMapData?[] zoneMapData)
     {
         var partialMins = new int[chunkCount];
         var hasValues = new bool[chunkCount];
@@ -943,6 +1063,13 @@ internal static class FusedAggregator
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
+            // Zone map optimization: skip chunks that cannot contain matches
+            if (CanSkipChunkViaZoneMap(predicates, zoneMapData, chunkIndex))
+            {
+                // Leave as MaxValue with hasValues[chunkIndex] = false (default)
+                return;
+            }
+
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, rowCount);
             int localMin = int.MaxValue;
@@ -988,7 +1115,8 @@ internal static class FusedAggregator
         int rowCount,
         int chunkSize,
         int chunkCount,
-        ParallelOptions parallelOptions)
+        ParallelOptions parallelOptions,
+        ColumnZoneMapData?[] zoneMapData)
     {
         var partialMins = new long[chunkCount];
         var hasValues = new bool[chunkCount];
@@ -999,6 +1127,12 @@ internal static class FusedAggregator
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
+            // Zone map optimization: skip chunks that cannot contain matches
+            if (CanSkipChunkViaZoneMap(predicates, zoneMapData, chunkIndex))
+            {
+                return;
+            }
+
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, rowCount);
             long localMin = long.MaxValue;
@@ -1044,7 +1178,8 @@ internal static class FusedAggregator
         int rowCount,
         int chunkSize,
         int chunkCount,
-        ParallelOptions parallelOptions)
+        ParallelOptions parallelOptions,
+        ColumnZoneMapData?[] zoneMapData)
     {
         var partialMins = new double[chunkCount];
         var hasValues = new bool[chunkCount];
@@ -1055,6 +1190,12 @@ internal static class FusedAggregator
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
+            // Zone map optimization: skip chunks that cannot contain matches
+            if (CanSkipChunkViaZoneMap(predicates, zoneMapData, chunkIndex))
+            {
+                return;
+            }
+
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, rowCount);
             double localMin = double.MaxValue;
@@ -1100,7 +1241,8 @@ internal static class FusedAggregator
         int rowCount,
         int chunkSize,
         int chunkCount,
-        ParallelOptions parallelOptions)
+        ParallelOptions parallelOptions,
+        ColumnZoneMapData?[] zoneMapData)
     {
         var partialMins = new decimal[chunkCount];
         var hasValues = new bool[chunkCount];
@@ -1109,6 +1251,12 @@ internal static class FusedAggregator
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
+            // Zone map optimization: skip chunks that cannot contain matches
+            if (CanSkipChunkViaZoneMap(predicates, zoneMapData, chunkIndex))
+            {
+                return;
+            }
+
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, rowCount);
             decimal localMin = decimal.MaxValue;
@@ -1287,14 +1435,15 @@ internal static class FusedAggregator
         int chunkSize,
         int chunkCount,
         ParallelOptions parallelOptions,
-        Type resultType)
+        Type resultType,
+        ColumnZoneMapData?[] zoneMapData)
     {
         return aggregateColumn switch
         {
-            Int32Array int32Array => ConvertResult(FusedMaxInt32Parallel(predicates, predicateColumns, int32Array, rowCount, chunkSize, chunkCount, parallelOptions), resultType),
-            Int64Array int64Array => ConvertResult(FusedMaxInt64Parallel(predicates, predicateColumns, int64Array, rowCount, chunkSize, chunkCount, parallelOptions), resultType),
-            DoubleArray doubleArray => ConvertResult(FusedMaxDoubleParallel(predicates, predicateColumns, doubleArray, rowCount, chunkSize, chunkCount, parallelOptions), resultType),
-            Decimal128Array decimalArray => ConvertResult(FusedMaxDecimalParallel(predicates, predicateColumns, decimalArray, rowCount, chunkSize, chunkCount, parallelOptions), resultType),
+            Int32Array int32Array => ConvertResult(FusedMaxInt32Parallel(predicates, predicateColumns, int32Array, rowCount, chunkSize, chunkCount, parallelOptions, zoneMapData), resultType),
+            Int64Array int64Array => ConvertResult(FusedMaxInt64Parallel(predicates, predicateColumns, int64Array, rowCount, chunkSize, chunkCount, parallelOptions, zoneMapData), resultType),
+            DoubleArray doubleArray => ConvertResult(FusedMaxDoubleParallel(predicates, predicateColumns, doubleArray, rowCount, chunkSize, chunkCount, parallelOptions, zoneMapData), resultType),
+            Decimal128Array decimalArray => ConvertResult(FusedMaxDecimalParallel(predicates, predicateColumns, decimalArray, rowCount, chunkSize, chunkCount, parallelOptions, zoneMapData), resultType),
             _ => throw new NotSupportedException($"Fused parallel Max not supported for {aggregateColumn.GetType().Name}")
         };
     }
@@ -1306,7 +1455,8 @@ internal static class FusedAggregator
         int rowCount,
         int chunkSize,
         int chunkCount,
-        ParallelOptions parallelOptions)
+        ParallelOptions parallelOptions,
+        ColumnZoneMapData?[] zoneMapData)
     {
         var partialMaxs = new int[chunkCount];
         var hasValues = new bool[chunkCount];
@@ -1317,6 +1467,12 @@ internal static class FusedAggregator
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
+            // Zone map optimization: skip chunks that cannot contain matches
+            if (CanSkipChunkViaZoneMap(predicates, zoneMapData, chunkIndex))
+            {
+                return;
+            }
+
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, rowCount);
             int localMax = int.MinValue;
@@ -1362,7 +1518,8 @@ internal static class FusedAggregator
         int rowCount,
         int chunkSize,
         int chunkCount,
-        ParallelOptions parallelOptions)
+        ParallelOptions parallelOptions,
+        ColumnZoneMapData?[] zoneMapData)
     {
         var partialMaxs = new long[chunkCount];
         var hasValues = new bool[chunkCount];
@@ -1373,6 +1530,12 @@ internal static class FusedAggregator
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
+            // Zone map optimization: skip chunks that cannot contain matches
+            if (CanSkipChunkViaZoneMap(predicates, zoneMapData, chunkIndex))
+            {
+                return;
+            }
+
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, rowCount);
             long localMax = long.MinValue;
@@ -1418,7 +1581,8 @@ internal static class FusedAggregator
         int rowCount,
         int chunkSize,
         int chunkCount,
-        ParallelOptions parallelOptions)
+        ParallelOptions parallelOptions,
+        ColumnZoneMapData?[] zoneMapData)
     {
         var partialMaxs = new double[chunkCount];
         var hasValues = new bool[chunkCount];
@@ -1429,6 +1593,12 @@ internal static class FusedAggregator
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
+            // Zone map optimization: skip chunks that cannot contain matches
+            if (CanSkipChunkViaZoneMap(predicates, zoneMapData, chunkIndex))
+            {
+                return;
+            }
+
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, rowCount);
             double localMax = double.MinValue;
@@ -1474,7 +1644,8 @@ internal static class FusedAggregator
         int rowCount,
         int chunkSize,
         int chunkCount,
-        ParallelOptions parallelOptions)
+        ParallelOptions parallelOptions,
+        ColumnZoneMapData?[] zoneMapData)
     {
         var partialMaxs = new decimal[chunkCount];
         var hasValues = new bool[chunkCount];
@@ -1483,6 +1654,12 @@ internal static class FusedAggregator
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
+            // Zone map optimization: skip chunks that cannot contain matches
+            if (CanSkipChunkViaZoneMap(predicates, zoneMapData, chunkIndex))
+            {
+                return;
+            }
+
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, rowCount);
             decimal localMax = decimal.MinValue;

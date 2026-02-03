@@ -1,0 +1,29 @@
+[
+  {
+    "ScenarioName": "FusedExecution",
+    "Description": "Fused filter\u002Baggregate vs separate passes",
+    "RowCount": 1000000,
+    "Iterations": 5,
+    "SamplesMicroseconds": [
+      125286.7,
+      95850.5,
+      94612.5,
+      94769.8,
+      52210.8
+    ],
+    "MinMicroseconds": 52210.8,
+    "MaxMicroseconds": 125286.7,
+    "MedianMicroseconds": 94769.8,
+    "AverageMicroseconds": 92546.06,
+    "StdDevMicroseconds": 26072.09822996607,
+    "RowsPerSecond": 10551884.672121288,
+    "MillionRowsPerSecond": 10.551884672121288,
+    "PhaseDetails": null,
+    "AllocatedBytes": 59033,
+    "Metadata": {
+      "FusedSum": "60,793,615,433.65",
+      "MatchCount": "528,216 rows matched"
+    },
+    "Timestamp": "2026-02-03T21:19:38.1702086Z"
+  }
+]
