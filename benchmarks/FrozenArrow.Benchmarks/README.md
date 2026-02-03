@@ -62,77 +62,90 @@ dotnet run -c Release -- --filter *FrozenArrow_*
 
 #### Filter + Count (High Selectivity ~5%)
 
-| Method | 100K items | 1M items |
-|--------|-----------|----------|
-| **DuckDB** | 284 ?s | 422 ?s |
-| List | 385 ?s | 4.6 ms |
-| FrozenArrow | 989 ?s | 9.4 ms |
+| Method | 10K | 100K | 1M |
+|--------|-----|------|-----|
+| **DuckDB** | 255 ?s | 284 ?s | 422 ?s |
+| List | 21 ?s | 385 ?s | 4.6 ms |
+| FrozenArrow | 83 ?s | 989 ?s | 9.4 ms |
 
 #### Filter + Count (Low Selectivity ~70%)
 
-| Method | 100K items | 1M items |
-|--------|-----------|----------|
-| **DuckDB** | 294 ?s | 424 ?s |
-| List | 430 ?s | 6.0 ms |
-| FrozenArrow | 654 ?s | 7.7 ms |
+| Method | 10K | 100K | 1M |
+|--------|-----|------|-----|
+| **DuckDB** | 250 ?s | 296 ?s | 428 ?s |
+| List | 28 ?s | 430 ?s | 6.0 ms |
+| FrozenArrow | 51 ?s | 654 ?s | 7.7 ms |
 
 #### Filter + ToList (High Selectivity ~5%)
 
-| Method | 100K items | 1M items |
-|--------|-----------|----------|
-| **List** | 365 ?s | 5.1 ms |
-| FrozenArrow | 5.3 ms | 53.5 ms |
-| DuckDB | 7.3 ms | 43.0 ms |
+| Method | 10K | 100K | 1M |
+|--------|-----|------|-----|
+| **List** | 20 ?s | 365 ?s | 5.1 ms |
+| FrozenArrow | 323 ?s | 5.3 ms | 54 ms |
+| DuckDB | 870 ?s | 7.3 ms | 43 ms |
 
 ### Aggregation Operations (Filtered)
 
-#### 1M Items
-
-| Method | Sum | Average | Min | Max |
-|--------|-----|---------|-----|-----|
-| **DuckDB** | 597 ?s | 603 ?s | 611 ?s | 626 ?s |
-| List | 10.2 ms | 8.2 ms | 10.9 ms | 11.2 ms |
-| FrozenArrow | 35.7 ms | 19.2 ms | 30.4 ms | 30.1 ms |
+| Method | 10K | 100K | 1M |
+|--------|-----|------|-----|
+| **DuckDB Sum** | 245 ?s | 370 ?s | 601 ?s |
+| **DuckDB Avg** | 237 ?s | 368 ?s | 616 ?s |
+| **DuckDB Min** | 244 ?s | 356 ?s | 601 ?s |
+| **DuckDB Max** | 239 ?s | 363 ?s | 632 ?s |
+| List Sum | 47 ?s | 625 ?s | 10.3 ms |
+| List Avg | 47 ?s | 474 ?s | 8.3 ms |
+| List Min | 41 ?s | 1.6 ms | 11.0 ms |
+| List Max | 41 ?s | 1.6 ms | 11.2 ms |
+| FrozenArrow Sum | 244 ?s | 3.6 ms | 35.6 ms |
+| FrozenArrow Avg | 182 ?s | 1.7 ms | 16.7 ms |
+| FrozenArrow Min | 278 ?s | 3.3 ms | 30.4 ms |
+| FrozenArrow Max | 256 ?s | 3.3 ms | 30.1 ms |
 
 ### GroupBy Operations
 
-#### 1M Items
-
-| Method | Count | Sum | Average | Multi-Agg |
-|--------|-------|-----|---------|-----------|
-| **DuckDB** | 4.5 ms | 5.2 ms | 4.7 ms | 5.2 ms |
-| FrozenArrow | 9.9 ms | 49.0 ms | 47.3 ms | 61.8 ms |
-| List | 23.3 ms | 41.2 ms | 47.7 ms | 49.1 ms |
+| Method | 10K | 100K | 1M |
+|--------|-----|------|-----|
+| **DuckDB Count** | 1.1 ms | 2.7 ms | 4.5 ms |
+| **DuckDB Sum** | 1.2 ms | 3.4 ms | 5.1 ms |
+| FrozenArrow Count | 78 ?s | 873 ?s | 9.9 ms |
+| FrozenArrow Sum | 428 ?s | 4.9 ms | 50.7 ms |
+| List Count | 159 ?s | 2.2 ms | 23.2 ms |
+| List Sum | 165 ?s | 2.8 ms | 41.7 ms |
 
 ### Pagination Operations
 
-#### 1M Items
+| Method | 10K | 100K | 1M |
+|--------|-----|------|-----|
+| **List Any** | 13 ns | 13 ns | 13 ns |
+| **List First** | 3 ns | 3 ns | 4 ns |
+| **List Take** | 212 ns | 213 ns | 214 ns |
+| **List Skip+Take** | 2.5 ?s | 2.5 ?s | 2.5 ?s |
+| FrozenArrow Any | 1.4 ?s | 1.8 ?s | 6.8 ?s |
+| FrozenArrow First | 1.3 ?s | 1.8 ?s | 6.8 ?s |
+| FrozenArrow Take | 36 ?s | 636 ?s | 7.6 ms |
+| FrozenArrow Skip+Take | 37 ?s | 633 ?s | 7.5 ms |
+| DuckDB Any | 310 ?s | 318 ?s | 319 ?s |
+| DuckDB First | 167 ?s | 169 ?s | 158 ?s |
+| DuckDB Take | 241 ?s | 254 ?s | 250 ?s |
+| DuckDB Skip+Take | 258 ?s | 251 ?s | 265 ?s |
 
-| Method | Any | First | Take(100) | Skip+Take |
-|--------|-----|-------|-----------|-----------|
-| **List** | 13 ns | 3 ns | 212 ns | 2.5 ?s |
-| FrozenArrow | 6.8 ?s | 6.9 ?s | 7.6 ms | 7.5 ms |
-| DuckDB | 328 ?s | 168 ?s | 247 ?s | 246 ?s |
+### Serialization (Standard Model - 10 columns)
+
+| Method | 10K | 100K | 1M |
+|--------|-----|------|-----|
+| **Arrow (No Compression)** | 359 ?s | 4.5 ms | 24 ms |
+| Arrow + LZ4 | 545 ?s | 5.7 ms | 56 ms |
+| Arrow + Zstd | 1.4 ms | 11.7 ms | 117 ms |
+| Protobuf | 2.1 ms | 25.9 ms | 231 ms |
 
 ### Serialization (Wide Model - 200 columns)
 
-#### 100K Items
-
-| Method | Time | Allocated |
-|--------|------|-----------|
-| **Arrow (No Compression)** | 38 ms | 238 MB |
-| Protobuf | 104 ms | 151 MB |
-| Arrow + LZ4 | 105 ms | 90 MB |
-| Arrow + Zstd | 227 ms | 64 MB |
-
-#### 1M Items
-
-| Method | Time | Allocated |
-|--------|------|-----------|
-| **Arrow (No Compression)** | 264 ms | 2,657 MB |
-| Protobuf | 922 ms | 1,206 MB |
-| Arrow + LZ4 | 1,250 ms | 663 MB |
-| Arrow + Zstd | 2,340 ms | 460 MB |
+| Method | 10K | 100K | 1M |
+|--------|-----|------|-----|
+| **Arrow (No Compression)** | 2.0 ms | 38 ms | 225 ms |
+| Protobuf | 10.3 ms | 103 ms | 935 ms |
+| Arrow + LZ4 | 11.0 ms | 107 ms | 1,232 ms |
+| Arrow + Zstd | 19 ms | 228 ms | 2,351 ms |
 
 ## Key Insights
 

@@ -908,24 +908,24 @@ FrozenArrow is designed for **memory efficiency**, not raw speed. Here's how it 
 
 | Scenario | List<T> | FrozenArrow | Savings |
 |----------|---------|-------------|---------|
-| Standard model (1M items) | 117 MB | 27 MB | **77%** |
-| Wide model (200 cols, 1M items) | 1,783 MB | 986 MB | **45%** |
+| Standard model (1M items) | 123 MB | 27 MB | **78%** |
+| Wide model (200 cols, 1M items) | 1,786 MB | 985 MB | **45%** |
 
 ### Query Performance (1M items)
 
 | Operation | List | FrozenArrow | DuckDB |
 |-----------|------|-------------|--------|
 | Filter + Count | 4.6 ms | 9.4 ms | **422 μs** |
-| Sum (filtered) | 10.2 ms | 35.7 ms | **597 μs** |
-| GroupBy + Count | 23.3 ms | **9.9 ms** | 4.5 ms |
-| Any (short-circuit) | **13 ns** | 6.8 μs | 328 μs |
+| Sum (filtered) | 10.3 ms | 35.6 ms | **601 μs** |
+| GroupBy + Count | 23.2 ms | **9.9 ms** | 4.5 ms |
+| Any (short-circuit) | **13 ns** | 6.8 μs | 319 μs |
 
 ### When to Use Each Technology
 
 | Use Case | Best Choice |
 |----------|-------------|
 | Aggregations at scale | **DuckDB** (10-50x faster) |
-| Memory-constrained environments | **FrozenArrow** (45-77% smaller) |
+| Memory-constrained environments | **FrozenArrow** (45-78% smaller) |
 | Short-circuit operations (Any/First) | **List<T>** (nanoseconds) |
 | .NET-native LINQ API | **FrozenArrow** (no SQL) |
 | Complex JOINs | **DuckDB** (not supported in FA) |

@@ -54,18 +54,17 @@ We use `Process.PrivateMemorySize64` because it captures both managed heap AND n
 
 | Items | List | FrozenArrow | DuckDB | FA vs List | FA vs DuckDB |
 |-------|------|-------------|--------|------------|--------------|
-| 10,000 | 2.0 MB | 6.8 MB | 6.7 MB | 3.4x larger | same |
-| 100,000 | 12.3 MB | 3.7 MB | 14.1 MB | **70% smaller** | **73% smaller** |
-| 500,000 | 61.2 MB | 14.2 MB | 53.3 MB | **77% smaller** | **73% smaller** |
-| 1,000,000 | 116.9 MB | 26.8 MB | 91.9 MB | **77% smaller** | **71% smaller** |
+| 10,000 | 1.8 MB | 6.9 MB | 6.7 MB | 3.8x larger | same |
+| 100,000 | 12.3 MB | 2.9 MB | 15.7 MB | **76% smaller** | **82% smaller** |
+| 1,000,000 | 122.5 MB | 27.1 MB | 96.7 MB | **78% smaller** | **72% smaller** |
 
 #### Query Memory Overhead (500K items)
 
 | Query Type | List | FrozenArrow | DuckDB |
 |------------|------|-------------|--------|
-| Count (no materialization) | 0 B | 19.9 MB | 48 KB |
-| Sum aggregation | 0 B | 18.8 MB | 860 KB |
-| GroupBy + Sum | 21.9 MB | 474.4 MB | 11.5 MB |
+| Count (no materialization) | 0 B | 18.3 MB | 616 KB |
+| Sum aggregation | 0 B | 18.4 MB | 2.4 MB |
+| GroupBy + Sum | 21.9 MB | 474.4 MB | 6.8 MB |
 
 ### Wide Model (200 columns, 1M items)
 
@@ -73,8 +72,8 @@ We use `Process.PrivateMemorySize64` because it captures both managed heap AND n
 
 | Storage | Memory | Savings vs List |
 |---------|--------|-----------------|
-| List<T> | 1,783 MB | — |
-| FrozenArrow | 986 MB | **44.7%** |
+| List<T> | 1,786 MB | — |
+| FrozenArrow | 985 MB | **44.8%** |
 
 #### Dictionary Encoding Impact
 
