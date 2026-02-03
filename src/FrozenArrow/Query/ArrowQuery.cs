@@ -208,8 +208,15 @@ public sealed class ArrowQueryProvider : IQueryProvider
         return analyzer.Analyze(expression);
     }
 
+
     private TResult ExecutePlan<TResult>(QueryPlan plan, Expression expression)
     {
+        // Try fused execution for filtered aggregates (single-pass optimization)
+        if (FusedAggregator.CanUseFusedExecution(plan, _count, _recordBatch, _columnIndexMap))
+        {
+            return ExecuteFusedAggregate<TResult>(plan);
+        }
+
         // Build selection bitmap using pooled bitfield (8x more memory efficient)
         using var selection = SelectionBitmap.Create(_count, initialValue: true);
 
@@ -296,6 +303,18 @@ public sealed class ArrowQueryProvider : IQueryProvider
         }
 
         throw new NotSupportedException($"Result type '{resultType}' is not supported.");
+    }
+
+    private TResult ExecuteFusedAggregate<TResult>(QueryPlan plan)
+    {
+        var result = FusedAggregator.ExecuteFused(
+            _recordBatch,
+            plan.ColumnPredicates,
+            plan.SimpleAggregate!,
+            _columnIndexMap,
+            ParallelOptions);
+
+        return (TResult)result;
     }
 
 

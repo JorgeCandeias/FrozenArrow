@@ -1490,4 +1490,188 @@ public class ArrowQueryTests
     }
 
     #endregion
+
+    #region Fused Execution Tests
+
+    /// <summary>
+    /// Record type using only primitive columns (no strings that get dictionary-encoded).
+    /// This allows testing fused execution which doesn't yet support DictionaryArray.
+    /// </summary>
+    [ArrowRecord]
+    public record FusedTestRecord
+    {
+        [ArrowArray(Name = "Id")]
+        public int Id { get; init; }
+
+        [ArrowArray(Name = "Age")]
+        public int Age { get; init; }
+
+        [ArrowArray(Name = "Score")]
+        public double Score { get; init; }
+
+        [ArrowArray(Name = "IsActive")]
+        public bool IsActive { get; init; }
+    }
+
+    private static FrozenArrow<FusedTestRecord> CreateFusedTestCollection(int count)
+    {
+        var records = new List<FusedTestRecord>();
+        for (int i = 0; i < count; i++)
+        {
+            records.Add(new FusedTestRecord
+            {
+                Id = i,
+                Age = 20 + (i % 50),
+                Score = 50.0 + (i % 100),
+                IsActive = i % 3 != 0
+            });
+        }
+        return records.ToFrozenArrow();
+    }
+
+    [Fact]
+    public void FusedExecution_Sum_ProducesCorrectResult()
+    {
+        // Arrange - Use enough rows to trigger fused execution (threshold is 1000)
+        using var collection = CreateFusedTestCollection(5_000);
+
+        // Calculate expected result manually
+        var expected = 0;
+        for (int i = 0; i < 5_000; i++)
+        {
+            if (20 + (i % 50) > 30) // Age > 30
+            {
+                expected += 20 + (i % 50);
+            }
+        }
+
+        // Act - Should use fused execution
+        var result = collection
+            .AsQueryable()
+            .Where(x => x.Age > 30)
+            .Sum(x => x.Age);
+
+        // Assert
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void FusedExecution_Average_ProducesCorrectResult()
+    {
+        // Arrange
+        using var collection = CreateFusedTestCollection(5_000);
+
+        // Calculate expected result manually
+        var sum = 0.0;
+        var count = 0;
+        for (int i = 0; i < 5_000; i++)
+        {
+            if (i % 3 != 0) // IsActive
+            {
+                sum += 20 + (i % 50);
+                count++;
+            }
+        }
+        var expected = sum / count;
+
+        // Act
+        var result = collection
+            .AsQueryable()
+            .Where(x => x.IsActive)
+            .Average(x => x.Age);
+
+        // Assert
+        Assert.Equal(expected, result, precision: 10);
+    }
+
+    [Fact]
+    public void FusedExecution_Min_ProducesCorrectResult()
+    {
+        // Arrange
+        using var collection = CreateFusedTestCollection(5_000);
+
+        // Act
+        var result = collection
+            .AsQueryable()
+            .Where(x => x.Age > 40)
+            .Min(x => x.Age);
+
+        // Assert - Ages range from 20-69 (20 + 0..49), so min > 40 is 41
+        Assert.Equal(41, result);
+    }
+
+    [Fact]
+    public void FusedExecution_Max_ProducesCorrectResult()
+    {
+        // Arrange
+        using var collection = CreateFusedTestCollection(5_000);
+
+        // Act
+        var result = collection
+            .AsQueryable()
+            .Where(x => x.IsActive)
+            .Max(x => x.Age);
+
+        // Assert - Ages range from 20-69
+        Assert.Equal(69, result);
+    }
+
+    [Fact]
+    public void FusedExecution_WithMultiplePredicates_ProducesCorrectResult()
+    {
+        // Arrange
+        using var collection = CreateFusedTestCollection(5_000);
+
+        // Calculate expected result
+        var expected = 0;
+        for (int i = 0; i < 5_000; i++)
+        {
+            var age = 20 + (i % 50);
+            var isActive = i % 3 != 0;
+            if (age > 25 && age < 50 && isActive)
+            {
+                expected += age;
+            }
+        }
+
+        // Act
+        var result = collection
+            .AsQueryable()
+            .Where(x => x.Age > 25 && x.Age < 50 && x.IsActive)
+            .Sum(x => x.Age);
+
+        // Assert
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void FusedExecution_ParallelMode_ProducesCorrectResult()
+    {
+        // Arrange - Use larger dataset to trigger parallel execution
+        using var collection = CreateFusedTestCollection(100_000);
+
+        // Calculate expected result
+        var expected = 0;
+        for (int i = 0; i < 100_000; i++)
+        {
+            var age = 20 + (i % 50);
+            var isActive = i % 3 != 0;
+            if (age > 30 && isActive)
+            {
+                expected += age;
+            }
+        }
+
+        // Act - Should use parallel fused execution
+        var result = collection
+            .AsQueryable()
+            .AsParallel()
+            .Where(x => x.Age > 30 && x.IsActive)
+            .Sum(x => x.Age);
+
+        // Assert
+        Assert.Equal(expected, result);
+    }
+
+    #endregion
 }

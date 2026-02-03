@@ -85,6 +85,18 @@ public abstract class ColumnPredicate
         // Default: not implemented, subclasses should override EvaluateRange instead
         throw new NotImplementedException("Subclass must override either EvaluateSingle or EvaluateRange");
     }
+
+    /// <summary>
+    /// Evaluates this predicate for a single row. Public version for fused execution.
+    /// </summary>
+    /// <param name="column">The column to evaluate against.</param>
+    /// <param name="index">The row index to evaluate.</param>
+    /// <returns>True if the row passes the predicate, false otherwise.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public virtual bool EvaluateSingleRow(IArrowArray column, int index)
+    {
+        return EvaluateSingle(column, index);
+    }
 }
 
 /// <summary>
@@ -1035,5 +1047,26 @@ public sealed class AndPredicate : ColumnPredicate
         {
             predicate.Evaluate(batch, selection);
         }
+    }
+
+    protected override bool EvaluateSingle(IArrowArray column, int index)
+    {
+        // AndPredicate doesn't use a single column, so this is not applicable
+        throw new NotSupportedException("AndPredicate.EvaluateSingle is not supported. Use EvaluateSingleRow instead.");
+    }
+
+    /// <summary>
+    /// For AndPredicate, we need to evaluate each sub-predicate against its respective column.
+    /// This override handles the composite nature of the predicate.
+    /// </summary>
+    public override bool EvaluateSingleRow(IArrowArray column, int index)
+    {
+        // Note: For AndPredicate, 'column' is not used directly because each
+        // sub-predicate operates on its own column. The caller must ensure
+        // that sub-predicates have their columns pre-resolved.
+        // This is handled in FusedAggregator which passes the correct columns.
+        throw new NotSupportedException(
+            "AndPredicate should be decomposed into individual predicates for fused execution. " +
+            "Each sub-predicate should be evaluated against its specific column.");
     }
 }
