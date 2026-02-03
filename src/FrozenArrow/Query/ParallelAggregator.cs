@@ -58,15 +58,23 @@ internal static class ParallelAggregator
 
         var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
+        
+        // Pre-apply null bitmap to selection in bulk - eliminates per-element null checks
+        // This is a single O(n/64) pass that enables branchless aggregation loops
+        var hasNulls = array.NullCount > 0;
+        if (hasNulls)
+        {
+            selection.AndWithNullBitmap(array.NullBitmapBuffer.Span, hasNulls);
+        }
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
             
-            // Use block-based iteration for efficient sparse access
+            // Use block-based iteration with nulls pre-applied (no per-element null checks)
             partialSums[chunkIndex] = BlockBasedAggregator.SumInt32BlockBased(
-                array, selectionBuffer, startRow, endRow);
+                array, selectionBuffer, startRow, endRow, nullsPreApplied: hasNulls);
         });
 
         long total = 0;
@@ -83,13 +91,19 @@ internal static class ParallelAggregator
 
         var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
+        
+        // Pre-apply null bitmap to selection - bulk O(n/64) vs per-element O(n)
+        var hasNulls = array.NullCount > 0;
+        if (hasNulls)
+        {
+            selection.AndWithNullBitmap(array.NullBitmapBuffer.Span, hasNulls);
+        }
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
             
-            // Use block-based iteration for efficient sparse access
             partialSums[chunkIndex] = BlockBasedAggregator.SumInt64BlockBased(
                 array, selectionBuffer, startRow, endRow);
         });
@@ -108,15 +122,22 @@ internal static class ParallelAggregator
 
         var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
+        
+        // Pre-apply null bitmap to selection - bulk O(n/64) vs per-element O(n)
+        var hasNulls = array.NullCount > 0;
+        if (hasNulls)
+        {
+            selection.AndWithNullBitmap(array.NullBitmapBuffer.Span, hasNulls);
+        }
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
             
-            // Use block-based iteration for efficient sparse access
+            // Use block-based iteration with nulls pre-applied
             partialSums[chunkIndex] = BlockBasedAggregator.SumDoubleBlockBased(
-                array, selectionBuffer, startRow, endRow);
+                array, selectionBuffer, startRow, endRow, nullsPreApplied: hasNulls);
         });
 
         double total = 0;
@@ -133,6 +154,13 @@ internal static class ParallelAggregator
 
         var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
+        
+        // Pre-apply null bitmap to selection - bulk O(n/64) vs per-element O(n)
+        var hasNulls = array.NullCount > 0;
+        if (hasNulls)
+        {
+            selection.AndWithNullBitmap(array.NullBitmapBuffer.Span, hasNulls);
+        }
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
@@ -141,7 +169,7 @@ internal static class ParallelAggregator
             
             // Use block-based iteration for efficient sparse access
             partialSums[chunkIndex] = BlockBasedAggregator.SumDecimalBlockBased(
-                array, selectionBuffer, startRow, endRow);
+                array, selectionBuffer, startRow, endRow, nullsPreApplied: hasNulls);
         });
 
         decimal total = 0;
@@ -191,15 +219,22 @@ internal static class ParallelAggregator
 
         var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
+        
+        // Pre-apply null bitmap to selection - bulk O(n/64) vs per-element O(n)
+        var hasNulls = array.NullCount > 0;
+        if (hasNulls)
+        {
+            selection.AndWithNullBitmap(array.NullBitmapBuffer.Span, hasNulls);
+        }
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
             
-            // Use block-based iteration for efficient sparse access
+            // Use block-based iteration with nulls pre-applied
             var (sum, count) = BlockBasedAggregator.SumAndCountInt32BlockBased(
-                array, selectionBuffer, startRow, endRow);
+                array, selectionBuffer, startRow, endRow, nullsPreApplied: hasNulls);
             partialSums[chunkIndex] = sum;
             partialCounts[chunkIndex] = count;
         });
@@ -224,25 +259,25 @@ internal static class ParallelAggregator
 
         var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
+        
+        // Pre-apply null bitmap to selection - bulk O(n/64) vs per-element O(n)
+        var hasNulls = array.NullCount > 0;
+        if (hasNulls)
+        {
+            selection.AndWithNullBitmap(array.NullBitmapBuffer.Span, hasNulls);
+        }
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
-            var values = array.Values;
-
-            long chunkSum = 0;
-            int count = 0;
-            for (int i = startRow; i < endRow; i++)
-            {
-                if (SelectionBitmap.IsSet(selectionBuffer, i) && !array.IsNull(i))
-                {
-                    chunkSum += values[i];
-                    count++;
-                }
-            }
-            partialSums[chunkIndex] = chunkSum;
-            partialCounts[chunkIndex] = count;
+            
+            // Use block-based iteration with nulls pre-applied
+            partialSums[chunkIndex] = BlockBasedAggregator.SumInt64BlockBased(
+                array, selectionBuffer, startRow, endRow);
+            
+            // For count, we need to count set bits in this range
+            partialCounts[chunkIndex] = CountSetBitsInRange(selectionBuffer, startRow, endRow);
         });
 
         long totalSum = 0;
@@ -265,15 +300,22 @@ internal static class ParallelAggregator
 
         var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
+        
+        // Pre-apply null bitmap to selection - bulk O(n/64) vs per-element O(n)
+        var hasNulls = array.NullCount > 0;
+        if (hasNulls)
+        {
+            selection.AndWithNullBitmap(array.NullBitmapBuffer.Span, hasNulls);
+        }
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
             
-            // Use block-based iteration for efficient sparse access
+            // Use block-based iteration with nulls pre-applied
             var (sum, count) = BlockBasedAggregator.SumAndCountDoubleBlockBased(
-                array, selectionBuffer, startRow, endRow);
+                array, selectionBuffer, startRow, endRow, nullsPreApplied: hasNulls);
             partialSums[chunkIndex] = sum;
             partialCounts[chunkIndex] = count;
         });
@@ -298,23 +340,23 @@ internal static class ParallelAggregator
 
         var selectionBuffer = selection.Buffer!;
         var parallelOptions = CreateParallelOptions(options);
+        
+        // Pre-apply null bitmap to selection - bulk O(n/64) vs per-element O(n)
+        var hasNulls = array.NullCount > 0;
+        if (hasNulls)
+        {
+            selection.AndWithNullBitmap(array.NullBitmapBuffer.Span, hasNulls);
+        }
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, length);
-
-            decimal chunkSum = 0;
-            int count = 0;
-            for (int i = startRow; i < endRow; i++)
-            {
-                if (SelectionBitmap.IsSet(selectionBuffer, i) && !array.IsNull(i))
-                {
-                    chunkSum += array.GetValue(i)!.Value;
-                    count++;
-                }
-            }
-            partialSums[chunkIndex] = chunkSum;
+            
+            // Use block-based iteration with nulls pre-applied
+            var (sum, count) = BlockBasedAggregator.SumAndCountDecimalBlockBased(
+                array, selectionBuffer, startRow, endRow, nullsPreApplied: hasNulls);
+            partialSums[chunkIndex] = sum;
             partialCounts[chunkIndex] = count;
         });
 
@@ -326,6 +368,46 @@ internal static class ParallelAggregator
             totalCount += partialCounts[i];
         }
         return totalCount > 0 ? totalSum / totalCount : 0;
+    }
+    
+    /// <summary>
+    /// Counts set bits in a range of the selection buffer.
+    /// </summary>
+    private static int CountSetBitsInRange(ulong[] buffer, int startRow, int endRow)
+    {
+        int startBlock = startRow >> 6;
+        int endBlock = (endRow - 1) >> 6;
+        int count = 0;
+        
+        for (int blockIndex = startBlock; blockIndex <= endBlock; blockIndex++)
+        {
+            ulong block = buffer[blockIndex];
+            if (block == 0) continue;
+            
+            int blockStartBit = blockIndex << 6;
+            
+            // Mask off bits before startRow
+            if (blockStartBit < startRow)
+            {
+                int bitsToSkip = startRow - blockStartBit;
+                block &= ~((1UL << bitsToSkip) - 1);
+            }
+            
+            // Mask off bits at or after endRow
+            int blockEndBit = blockStartBit + 64;
+            if (blockEndBit > endRow)
+            {
+                int bitsToKeep = endRow - blockStartBit;
+                if (bitsToKeep < 64)
+                {
+                    block &= (1UL << bitsToKeep) - 1;
+                }
+            }
+            
+            count += System.Numerics.BitOperations.PopCount(block);
+        }
+        
+        return count;
     }
 
     #endregion

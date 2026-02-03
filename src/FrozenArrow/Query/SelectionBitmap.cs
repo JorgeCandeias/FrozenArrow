@@ -795,6 +795,140 @@ public struct SelectionBitmap : IDisposable
     }
 
     /// <summary>
+    /// ANDs this selection bitmap with an Arrow-format null bitmap (validity bitmap).
+    /// In Arrow format: bit = 1 means valid (not null), bit = 0 means null.
+    /// This clears selection bits where the corresponding value is null.
+    /// </summary>
+    /// <param name="nullBitmap">The Arrow null bitmap as a byte span (1 bit per row, little-endian).</param>
+    /// <param name="hasNulls">If false, this method is a no-op (all values are valid).</param>
+    /// <remarks>
+    /// This is a bulk operation that processes 64 bits at a time using SIMD,
+    /// eliminating the need for per-element IsNull() checks in aggregation loops.
+    /// 
+    /// Arrow null bitmap layout:
+    /// - Byte 0, bit 0 = row 0
+    /// - Byte 0, bit 7 = row 7
+    /// - Byte 1, bit 0 = row 8
+    /// 
+    /// Performance: O(n/64) ulong operations instead of O(n) per-element checks.
+    /// For 1M rows: ~15.6K iterations vs 1M iterations.
+    /// </remarks>
+    public void AndWithNullBitmap(ReadOnlySpan<byte> nullBitmap, bool hasNulls)
+    {
+        if (!hasNulls || nullBitmap.IsEmpty || _blockCount == 0)
+            return;
+
+        ref var selectionRef = ref _buffer![0];
+        ref byte nullRef = ref System.Runtime.InteropServices.MemoryMarshal.GetReference(nullBitmap);
+        int i = 0;
+
+        // Process 64 bits (8 bytes of null bitmap = 1 ulong of selection) at a time
+        // AVX2 path: process 256 bits (32 bytes of null bitmap = 4 ulongs) at a time
+        if (Vector256.IsHardwareAccelerated && _blockCount >= Vector256ULongCount)
+        {
+            int vectorEnd = _blockCount - (_blockCount % Vector256ULongCount);
+            
+            for (; i < vectorEnd; i += Vector256ULongCount)
+            {
+                // Load 32 bytes of null bitmap and reinterpret as 4 ulongs
+                int byteOffset = i * 8; // Each ulong block = 64 bits = 8 bytes
+                
+                // Load 4 ulongs worth of null bitmap (32 bytes)
+                var nullVec = Vector256.LoadUnsafe(ref Unsafe.As<byte, ulong>(ref Unsafe.Add(ref nullRef, byteOffset)));
+                
+                // Load 4 ulongs of selection bitmap
+                var selectionVec = Vector256.LoadUnsafe(ref Unsafe.Add(ref selectionRef, i));
+                
+                // AND them together
+                Vector256.StoreUnsafe(selectionVec & nullVec, ref Unsafe.Add(ref selectionRef, i));
+            }
+        }
+
+        // Scalar path: process 64 bits (8 bytes) at a time
+        for (; i < _blockCount; i++)
+        {
+            int byteOffset = i * 8;
+            
+            // Handle potential partial last block (null bitmap might be shorter)
+            if (byteOffset + 8 <= nullBitmap.Length)
+            {
+                // Full 8 bytes available - read as ulong
+                ulong nullBlock = Unsafe.As<byte, ulong>(ref Unsafe.Add(ref nullRef, byteOffset));
+                Unsafe.Add(ref selectionRef, i) &= nullBlock;
+            }
+            else
+            {
+                // Partial block at end - read byte by byte
+                ulong nullBlock = 0;
+                for (int b = 0; b < 8 && byteOffset + b < nullBitmap.Length; b++)
+                {
+                    nullBlock |= (ulong)Unsafe.Add(ref nullRef, byteOffset + b) << (b * 8);
+                }
+                // For missing bytes, assume all valid (0xFF)
+                int missingBytes = 8 - Math.Min(8, nullBitmap.Length - byteOffset);
+                for (int b = 8 - missingBytes; b < 8; b++)
+                {
+                    nullBlock |= 0xFFUL << (b * 8);
+                }
+                Unsafe.Add(ref selectionRef, i) &= nullBlock;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Static version of AndWithNullBitmap for parallel execution scenarios.
+    /// ANDs a range of the selection buffer with the corresponding range of the null bitmap.
+    /// </summary>
+    /// <param name="selectionBuffer">The selection bitmap buffer.</param>
+    /// <param name="nullBitmap">The Arrow null bitmap.</param>
+    /// <param name="startRow">First row index (inclusive).</param>
+    /// <param name="endRow">Last row index (exclusive).</param>
+    /// <param name="hasNulls">If false, this method is a no-op.</param>
+    internal static void AndWithNullBitmapRange(
+        ulong[] selectionBuffer,
+        ReadOnlySpan<byte> nullBitmap,
+        int startRow,
+        int endRow,
+        bool hasNulls)
+    {
+        if (!hasNulls || nullBitmap.IsEmpty)
+            return;
+
+        int startBlock = startRow >> 6;      // startRow / 64
+        int endBlock = (endRow - 1) >> 6;    // Last block containing bits
+
+        ref var selectionRef = ref selectionBuffer[0];
+        ref byte nullRef = ref System.Runtime.InteropServices.MemoryMarshal.GetReference(nullBitmap);
+
+        for (int blockIndex = startBlock; blockIndex <= endBlock; blockIndex++)
+        {
+            int byteOffset = blockIndex * 8;
+            
+            // Read 8 bytes as ulong, handling boundary conditions
+            ulong nullBlock;
+            if (byteOffset + 8 <= nullBitmap.Length)
+            {
+                nullBlock = Unsafe.As<byte, ulong>(ref Unsafe.Add(ref nullRef, byteOffset));
+            }
+            else
+            {
+                nullBlock = 0;
+                for (int b = 0; b < 8 && byteOffset + b < nullBitmap.Length; b++)
+                {
+                    nullBlock |= (ulong)Unsafe.Add(ref nullRef, byteOffset + b) << (b * 8);
+                }
+                int missingBytes = 8 - Math.Min(8, nullBitmap.Length - byteOffset);
+                for (int b = 8 - missingBytes; b < 8; b++)
+                {
+                    nullBlock |= 0xFFUL << (b * 8);
+                }
+            }
+
+            Unsafe.Add(ref selectionRef, blockIndex) &= nullBlock;
+        }
+    }
+
+    /// <summary>
     /// Disposes the bitmap and returns the buffer to the pool.
     /// </summary>
     public void Dispose()

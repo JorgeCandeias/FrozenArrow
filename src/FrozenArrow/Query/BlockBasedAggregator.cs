@@ -19,22 +19,33 @@ namespace FrozenArrow.Query;
 /// For a 50% selection rate on 1M rows:
 /// - Dense: 1M loop iterations with bit checks
 /// - Block: ~15.6K block loads + ~500K value accesses (no wasted iterations)
+/// 
+/// Null Bitmap Optimization:
+/// When hasNulls is true, the caller should pre-apply the null bitmap to the selection
+/// using SelectionBitmap.AndWithNullBitmapRange() before calling these methods.
+/// This eliminates per-element IsNull() checks in the inner loop.
 /// </remarks>
 internal static class BlockBasedAggregator
 {
     /// <summary>
     /// Computes sum of Int32 values using block-based bitmap iteration.
+    /// For nullable columns, call AndWithNullBitmapRange first to pre-apply null mask.
     /// </summary>
+    /// <param name="array">The Int32 array to sum.</param>
+    /// <param name="selectionBuffer">Selection bitmap buffer (pre-masked with null bitmap if applicable).</param>
+    /// <param name="startRow">First row index (inclusive).</param>
+    /// <param name="endRow">Last row index (exclusive).</param>
+    /// <param name="nullsPreApplied">True if null bitmap was already ANDed into selection.</param>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static long SumInt32BlockBased(
         Int32Array array,
         ulong[] selectionBuffer,
         int startRow,
-        int endRow)
+        int endRow,
+        bool nullsPreApplied = false)
     {
         var values = array.Values;
-        var nullBitmap = array.NullBitmapBuffer.Span;
-        var hasNulls = array.NullCount > 0;
+        var hasNulls = array.NullCount > 0 && !nullsPreApplied;
         
         long sum = 0;
         
@@ -74,8 +85,10 @@ internal static class BlockBasedAggregator
             if (block == 0) continue;
             
             // Process set bits using TrailingZeroCount
+            // No null check needed if nullsPreApplied is true
             if (hasNulls)
             {
+                var nullBitmap = array.NullBitmapBuffer.Span;
                 while (block != 0)
                 {
                     int bitIndex = BitOperations.TrailingZeroCount(block);
@@ -91,7 +104,7 @@ internal static class BlockBasedAggregator
             }
             else
             {
-                // No nulls - faster path
+                // No nulls OR nulls pre-applied - faster path without null checks
                 while (block != 0)
                 {
                     int bitIndex = BitOperations.TrailingZeroCount(block);
@@ -103,6 +116,17 @@ internal static class BlockBasedAggregator
         }
         
         return sum;
+    }
+
+    // Legacy overload for backward compatibility
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    public static long SumInt32BlockBased(
+        Int32Array array,
+        ulong[] selectionBuffer,
+        int startRow,
+        int endRow)
+    {
+        return SumInt32BlockBased(array, selectionBuffer, startRow, endRow, nullsPreApplied: false);
     }
 
     /// <summary>
@@ -183,17 +207,18 @@ internal static class BlockBasedAggregator
 
     /// <summary>
     /// Computes sum of Double values using block-based bitmap iteration.
+    /// For nullable columns, call AndWithNullBitmapRange first to pre-apply null mask.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static double SumDoubleBlockBased(
         DoubleArray array,
         ulong[] selectionBuffer,
         int startRow,
-        int endRow)
+        int endRow,
+        bool nullsPreApplied = false)
     {
         var values = array.Values;
-        var nullBitmap = array.NullBitmapBuffer.Span;
-        var hasNulls = array.NullCount > 0;
+        var hasNulls = array.NullCount > 0 && !nullsPreApplied;
         
         double sum = 0;
         
@@ -229,6 +254,7 @@ internal static class BlockBasedAggregator
             
             if (hasNulls)
             {
+                var nullBitmap = array.NullBitmapBuffer.Span;
                 while (block != 0)
                 {
                     int bitIndex = BitOperations.TrailingZeroCount(block);
@@ -244,6 +270,7 @@ internal static class BlockBasedAggregator
             }
             else
             {
+                // No nulls OR nulls pre-applied - faster path without null checks
                 while (block != 0)
                 {
                     int bitIndex = BitOperations.TrailingZeroCount(block);
@@ -257,17 +284,30 @@ internal static class BlockBasedAggregator
         return sum;
     }
 
+    // Legacy overload for backward compatibility
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    public static double SumDoubleBlockBased(
+        DoubleArray array,
+        ulong[] selectionBuffer,
+        int startRow,
+        int endRow)
+    {
+        return SumDoubleBlockBased(array, selectionBuffer, startRow, endRow, nullsPreApplied: false);
+    }
+
     /// <summary>
     /// Computes sum of Decimal values using block-based bitmap iteration.
+    /// For nullable columns, call AndWithNullBitmapRange first to pre-apply null mask.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static decimal SumDecimalBlockBased(
         Decimal128Array array,
         ulong[] selectionBuffer,
         int startRow,
-        int endRow)
+        int endRow,
+        bool nullsPreApplied = false)
     {
-        var hasNulls = array.NullCount > 0;
+        var hasNulls = array.NullCount > 0 && !nullsPreApplied;
         
         decimal sum = 0;
         
@@ -316,6 +356,7 @@ internal static class BlockBasedAggregator
             }
             else
             {
+                // No nulls OR nulls pre-applied - faster path without null checks
                 while (block != 0)
                 {
                     int bitIndex = BitOperations.TrailingZeroCount(block);
@@ -329,19 +370,31 @@ internal static class BlockBasedAggregator
         return sum;
     }
 
+    // Legacy overload for backward compatibility
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    public static decimal SumDecimalBlockBased(
+        Decimal128Array array,
+        ulong[] selectionBuffer,
+        int startRow,
+        int endRow)
+    {
+        return SumDecimalBlockBased(array, selectionBuffer, startRow, endRow, nullsPreApplied: false);
+    }
+
     /// <summary>
     /// Computes average of Int32 values using block-based bitmap iteration.
+    /// For nullable columns, call AndWithNullBitmapRange first to pre-apply null mask.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static (long sum, int count) SumAndCountInt32BlockBased(
         Int32Array array,
         ulong[] selectionBuffer,
         int startRow,
-        int endRow)
+        int endRow,
+        bool nullsPreApplied = false)
     {
         var values = array.Values;
-        var nullBitmap = array.NullBitmapBuffer.Span;
-        var hasNulls = array.NullCount > 0;
+        var hasNulls = array.NullCount > 0 && !nullsPreApplied;
         
         long sum = 0;
         int count = 0;
@@ -378,6 +431,7 @@ internal static class BlockBasedAggregator
             
             if (hasNulls)
             {
+                var nullBitmap = array.NullBitmapBuffer.Span;
                 while (block != 0)
                 {
                     int bitIndex = BitOperations.TrailingZeroCount(block);
@@ -394,6 +448,7 @@ internal static class BlockBasedAggregator
             }
             else
             {
+                // No nulls OR nulls pre-applied - faster path without null checks
                 while (block != 0)
                 {
                     int bitIndex = BitOperations.TrailingZeroCount(block);
@@ -408,19 +463,31 @@ internal static class BlockBasedAggregator
         return (sum, count);
     }
 
+    // Legacy overload for backward compatibility
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    public static (long sum, int count) SumAndCountInt32BlockBased(
+        Int32Array array,
+        ulong[] selectionBuffer,
+        int startRow,
+        int endRow)
+    {
+        return SumAndCountInt32BlockBased(array, selectionBuffer, startRow, endRow, nullsPreApplied: false);
+    }
+
     /// <summary>
     /// Computes sum and count of Double values using block-based bitmap iteration.
+    /// For nullable columns, call AndWithNullBitmapRange first to pre-apply null mask.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static (double sum, int count) SumAndCountDoubleBlockBased(
         DoubleArray array,
         ulong[] selectionBuffer,
         int startRow,
-        int endRow)
+        int endRow,
+        bool nullsPreApplied = false)
     {
         var values = array.Values;
-        var nullBitmap = array.NullBitmapBuffer.Span;
-        var hasNulls = array.NullCount > 0;
+        var hasNulls = array.NullCount > 0 && !nullsPreApplied;
         
         double sum = 0;
         int count = 0;
@@ -457,6 +524,7 @@ internal static class BlockBasedAggregator
             
             if (hasNulls)
             {
+                var nullBitmap = array.NullBitmapBuffer.Span;
                 while (block != 0)
                 {
                     int bitIndex = BitOperations.TrailingZeroCount(block);
@@ -473,11 +541,101 @@ internal static class BlockBasedAggregator
             }
             else
             {
+                // No nulls OR nulls pre-applied - faster path without null checks
                 while (block != 0)
                 {
                     int bitIndex = BitOperations.TrailingZeroCount(block);
                     int rowIndex = blockStartBit + bitIndex;
                     sum += Unsafe.Add(ref valuesRef, rowIndex);
+                    count++;
+                    block &= block - 1;
+                }
+            }
+        }
+        
+        return (sum, count);
+    }
+
+    // Legacy overload for backward compatibility
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    public static (double sum, int count) SumAndCountDoubleBlockBased(
+        DoubleArray array,
+        ulong[] selectionBuffer,
+        int startRow,
+        int endRow)
+    {
+        return SumAndCountDoubleBlockBased(array, selectionBuffer, startRow, endRow, nullsPreApplied: false);
+    }
+
+    /// <summary>
+    /// Computes sum and count of Decimal values using block-based bitmap iteration.
+    /// For nullable columns, call AndWithNullBitmapRange first to pre-apply null mask.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    public static (decimal sum, int count) SumAndCountDecimalBlockBased(
+        Decimal128Array array,
+        ulong[] selectionBuffer,
+        int startRow,
+        int endRow,
+        bool nullsPreApplied = false)
+    {
+        var hasNulls = array.NullCount > 0 && !nullsPreApplied;
+        
+        decimal sum = 0;
+        int count = 0;
+        
+        int startBlock = startRow >> 6;
+        int endBlock = (endRow - 1) >> 6;
+        
+        for (int blockIndex = startBlock; blockIndex <= endBlock; blockIndex++)
+        {
+            ulong block = selectionBuffer[blockIndex];
+            if (block == 0) continue;
+            
+            int blockStartBit = blockIndex << 6;
+            
+            if (blockStartBit < startRow)
+            {
+                int bitsToSkip = startRow - blockStartBit;
+                block &= ~((1UL << bitsToSkip) - 1);
+            }
+            
+            int blockEndBit = blockStartBit + 64;
+            if (blockEndBit > endRow)
+            {
+                int bitsToKeep = endRow - blockStartBit;
+                if (bitsToKeep < 64)
+                {
+                    block &= (1UL << bitsToKeep) - 1;
+                }
+            }
+            
+            if (block == 0) continue;
+            
+            if (hasNulls)
+            {
+                while (block != 0)
+                {
+                    int bitIndex = BitOperations.TrailingZeroCount(block);
+                    int rowIndex = blockStartBit + bitIndex;
+                    
+                    if (!array.IsNull(rowIndex))
+                    {
+                        sum += array.GetValue(rowIndex)!.Value;
+                        count++;
+                    }
+                    
+                    block &= block - 1;
+                }
+            }
+            else
+            {
+                // No nulls OR nulls pre-applied - faster path without null checks
+                while (block != 0)
+                {
+                    int bitIndex = BitOperations.TrailingZeroCount(block);
+                    int rowIndex = blockStartBit + bitIndex;
+                    sum += array.GetValue(rowIndex)!.Value;
                     count++;
                     block &= block - 1;
                 }
