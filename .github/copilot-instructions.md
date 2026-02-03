@@ -270,7 +270,7 @@ When a user requests optimization work:
 AI: "First, let me establish a performance baseline..."
 
 cd profiling/FrozenArrow.Profiling
-dotnet run -c Release -- -s all -r 1000000 --save baseline-{date}-{optimization}.json
+dotnet run -c Release -- -s all -r 1000000 --save baseline-{optimization}.json
 ```
 
 ### Step 3: Proposal
@@ -299,7 +299,7 @@ Which would you like me to implement?"
 ```
 AI: "Now let's verify the optimization worked..."
 
-dotnet run -c Release -- -s all -r 1000000 -c baseline-{date}-{optimization}.json
+dotnet run -c Release -- -s all -r 1000000 -c baseline-{optimization}.json
 ```
 
 ### Step 6: Drill-down (if needed)
