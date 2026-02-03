@@ -276,18 +276,8 @@ internal static class FusedAggregator
         Int32Array valueArray,
         int rowCount)
     {
-        long sum = 0;
-        var values = valueArray.Values;
-
-        for (int i = 0; i < rowCount; i++)
-        {
-            if (!valueArray.IsNull(i) && EvaluateAllPredicates(predicates, predicateColumns, i))
-            {
-                sum += values[i];
-            }
-        }
-
-        return sum;
+        // Use SIMD-optimized path when available
+        return SimdFusedEvaluator.FusedSumInt32Simd(predicates, predicateColumns, valueArray, 0, rowCount);
     }
 
     private static long FusedSumInt64Sequential(
@@ -316,18 +306,8 @@ internal static class FusedAggregator
         DoubleArray valueArray,
         int rowCount)
     {
-        double sum = 0;
-        var values = valueArray.Values;
-
-        for (int i = 0; i < rowCount; i++)
-        {
-            if (!valueArray.IsNull(i) && EvaluateAllPredicates(predicates, predicateColumns, i))
-            {
-                sum += values[i];
-            }
-        }
-
-        return sum;
+        // Use SIMD-optimized path when available
+        return SimdFusedEvaluator.FusedSumDoubleSimd(predicates, predicateColumns, valueArray, 0, rowCount);
     }
 
     private static decimal FusedSumDecimalSequential(
@@ -381,8 +361,6 @@ internal static class FusedAggregator
         ColumnZoneMapData?[] zoneMapData)
     {
         var partialSums = new long[chunkCount];
-        ref readonly int valuesRef = ref MemoryMarshal.GetReference(valueArray.Values);
-        int* valuesPtr = (int*)Unsafe.AsPointer(ref Unsafe.AsRef(in valuesRef));
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
@@ -395,17 +373,10 @@ internal static class FusedAggregator
 
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, rowCount);
-            long localSum = 0;
-
-            for (int i = startRow; i < endRow; i++)
-            {
-                if (!valueArray.IsNull(i) && EvaluateAllPredicates(predicates, predicateColumns, i))
-                {
-                    localSum += valuesPtr[i];
-                }
-            }
-
-            partialSums[chunkIndex] = localSum;
+            
+            // Use SIMD-optimized evaluation
+            partialSums[chunkIndex] = SimdFusedEvaluator.FusedSumInt32Simd(
+                predicates, predicateColumns, valueArray, startRow, endRow);
         });
 
         long total = 0;
@@ -473,8 +444,6 @@ internal static class FusedAggregator
         ColumnZoneMapData?[] zoneMapData)
     {
         var partialSums = new double[chunkCount];
-        ref readonly double valuesRef = ref MemoryMarshal.GetReference(valueArray.Values);
-        double* valuesPtr = (double*)Unsafe.AsPointer(ref Unsafe.AsRef(in valuesRef));
 
         Parallel.For(0, chunkCount, parallelOptions, chunkIndex =>
         {
@@ -487,17 +456,10 @@ internal static class FusedAggregator
 
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, rowCount);
-            double localSum = 0;
-
-            for (int i = startRow; i < endRow; i++)
-            {
-                if (!valueArray.IsNull(i) && EvaluateAllPredicates(predicates, predicateColumns, i))
-                {
-                    localSum += valuesPtr[i];
-                }
-            }
-
-            partialSums[chunkIndex] = localSum;
+            
+            // Use SIMD-optimized evaluation
+            partialSums[chunkIndex] = SimdFusedEvaluator.FusedSumDoubleSimd(
+                predicates, predicateColumns, valueArray, startRow, endRow);
         });
 
         double total = 0;
