@@ -94,6 +94,7 @@ public sealed class ArrowQueryProvider : IQueryProvider
     private readonly int _count;
     private readonly Func<RecordBatch, int, object> _createItem;
     private readonly Dictionary<string, int> _columnIndexMap;
+    private readonly ZoneMap? _zoneMap;
 
     /// <summary>
     /// Gets or sets whether the provider operates in strict mode.
@@ -155,6 +156,9 @@ public sealed class ArrowQueryProvider : IQueryProvider
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
         
         _createItem = (batch, index) => createItemMethod!.Invoke(source, [batch, index])!;
+
+        // Build zone maps for the RecordBatch
+        _zoneMap = ZoneMap.BuildFromRecordBatch(_recordBatch, chunkSize: ParallelQueryOptions.Default.ChunkSize);
     }
 
     internal FrozenArrow<TElement> GetSource<TElement>()
@@ -227,7 +231,8 @@ public sealed class ArrowQueryProvider : IQueryProvider
                 _recordBatch, 
                 ref System.Runtime.CompilerServices.Unsafe.AsRef(in selection),
                 plan.ColumnPredicates,
-                ParallelOptions);
+                ParallelOptions,
+                _zoneMap);
         }
 
         // Count selected rows using hardware popcount
@@ -552,7 +557,8 @@ public sealed class ArrowQueryProvider : IQueryProvider
                 _recordBatch,
                 ref System.Runtime.CompilerServices.Unsafe.AsRef(in selection),
                 plan.ColumnPredicates,
-                ParallelOptions);
+                ParallelOptions,
+                _zoneMap);
         }
 
         // Parse the aggregate selector to extract aggregations

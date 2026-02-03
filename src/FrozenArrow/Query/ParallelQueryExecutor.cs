@@ -48,16 +48,19 @@ internal static class ParallelQueryExecutor
     /// <summary>
     /// Evaluates multiple predicates against a record batch in parallel.
     /// Each chunk of rows is processed by all predicates before moving to the next chunk.
+    /// Zone maps are used to skip entire chunks when possible.
     /// </summary>
     /// <param name="batch">The Arrow record batch to evaluate.</param>
     /// <param name="selection">The selection bitmap to update.</param>
     /// <param name="predicates">The predicates to evaluate.</param>
     /// <param name="options">Parallel execution options.</param>
+    /// <param name="zoneMap">Optional zone map for skip-scanning optimization.</param>
     public static unsafe void EvaluatePredicatesParallel(
         RecordBatch batch,
         ref SelectionBitmap selection,
         IReadOnlyList<ColumnPredicate> predicates,
-        ParallelQueryOptions? options = null)
+        ParallelQueryOptions? options = null,
+        ZoneMap? zoneMap = null)
     {
         options ??= ParallelQueryOptions.Default;
         var rowCount = batch.Length;
@@ -67,7 +70,7 @@ internal static class ParallelQueryExecutor
             rowCount < options.ParallelThreshold || 
             predicates.Count == 0)
         {
-            EvaluatePredicatesSequential(batch, ref selection, predicates);
+            EvaluatePredicatesSequential(batch, ref selection, predicates, zoneMap);
             return;
         }
 
@@ -77,7 +80,7 @@ internal static class ParallelQueryExecutor
         // For single chunk, use sequential
         if (chunkCount == 1)
         {
-            EvaluatePredicatesSequential(batch, ref selection, predicates);
+            EvaluatePredicatesSequential(batch, ref selection, predicates, zoneMap);
             return;
         }
 
@@ -94,6 +97,16 @@ internal static class ParallelQueryExecutor
             columns[i] = batch.Column(predicates[i].ColumnIndex);
         }
 
+        // Pre-fetch zone map data for predicates
+        var zoneMapData = new ColumnZoneMapData?[predicates.Count];
+        if (zoneMap != null)
+        {
+            for (int i = 0; i < predicates.Count; i++)
+            {
+                zoneMap.TryGetColumnZoneMap(predicates[i].ColumnName, out zoneMapData[i]);
+            }
+        }
+
         // Get a pointer to the selection bitmap.
         // This is safe because:
         // 1. The bitmap outlives the parallel operation (it's created in ExecutePlan with 'using')
@@ -107,8 +120,20 @@ internal static class ParallelQueryExecutor
             var startRow = chunkIndex * chunkSize;
             var endRow = Math.Min(startRow + chunkSize, rowCount);
 
+            // Zone map skip test: Check if ALL predicates agree that this chunk can be skipped
+            if (CanSkipChunkViaZoneMap(predicates, zoneMapData, chunkIndex))
+            {
+                // Clear the entire chunk - no matches possible
+                ref var sel = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
+                for (int i = startRow; i < endRow; i++)
+                {
+                    sel.Clear(i);
+                }
+                return; // Skip chunk evaluation
+            }
+
             // Get a reference to the selection bitmap from the pointer
-            ref var sel = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
+            ref var selection = ref Unsafe.AsRef<SelectionBitmap>(selectionPtr);
 
             // Apply each predicate to this chunk
             for (int predIdx = 0; predIdx < predicates.Count; predIdx++)
@@ -116,9 +141,29 @@ internal static class ParallelQueryExecutor
                 var predicate = predicates[predIdx];
                 var column = columns[predIdx];
                 
-                predicate.EvaluateRange(column, ref sel, startRow, endRow);
+                predicate.EvaluateRange(column, ref selection, startRow, endRow);
             }
         });
+    }
+
+    /// <summary>
+    /// Checks if a chunk can be skipped based on zone maps.
+    /// Returns true only if at least one predicate definitively excludes the chunk.
+    /// </summary>
+    private static bool CanSkipChunkViaZoneMap(
+        IReadOnlyList<ColumnPredicate> predicates,
+        ColumnZoneMapData?[] zoneMapData,
+        int chunkIndex)
+    {
+        // A chunk can be skipped if ANY predicate says it cannot possibly contain matches
+        for (int i = 0; i < predicates.Count; i++)
+        {
+            if (!predicates[i].MayContainMatches(zoneMapData[i], chunkIndex))
+            {
+                return true; // This predicate excludes the chunk
+            }
+        }
+        return false; // At least one predicate might have matches, must evaluate
     }
 
     /// <summary>
@@ -128,7 +173,8 @@ internal static class ParallelQueryExecutor
     private static void EvaluatePredicatesSequential(
         RecordBatch batch,
         ref SelectionBitmap selection,
-        IReadOnlyList<ColumnPredicate> predicates)
+        IReadOnlyList<ColumnPredicate> predicates,
+        ZoneMap? zoneMap = null)
     {
         foreach (var predicate in predicates)
         {

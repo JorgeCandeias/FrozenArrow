@@ -97,6 +97,20 @@ public abstract class ColumnPredicate
     {
         return EvaluateSingle(column, index);
     }
+
+    /// <summary>
+    /// Tests if a chunk can potentially contain matching rows based on zone map min/max values.
+    /// Returns true if the chunk might contain matches (must evaluate), false if it definitely doesn't (can skip).
+    /// </summary>
+    /// <param name="zoneMapData">The zone map data for this column.</param>
+    /// <param name="chunkIndex">The chunk index to test.</param>
+    /// <returns>True if the chunk should be evaluated, false if it can be skipped.</returns>
+    public virtual bool MayContainMatches(ColumnZoneMapData? zoneMapData, int chunkIndex)
+    {
+        // Default: conservative - assume chunk may contain matches
+        // Subclasses override for specific predicate types
+        return true;
+    }
 }
 
 /// <summary>
@@ -369,6 +383,33 @@ public sealed class Int32ComparisonPredicate : ColumnPredicate
 
         // Fallback to scalar path
         base.EvaluateRange(column, ref selection, startIndex, endIndex);
+    }
+
+    /// <summary>
+    /// Tests if a chunk can potentially contain matching rows based on zone map min/max values.
+    /// </summary>
+    public override bool MayContainMatches(ColumnZoneMapData? zoneMapData, int chunkIndex)
+    {
+        if (zoneMapData == null || zoneMapData.Type != ZoneMapType.Int32)
+            return true; // No zone map available, must evaluate
+
+        if (zoneMapData.AllNulls[chunkIndex])
+            return false; // All nulls, predicate will fail
+
+        var min = (int)zoneMapData.Mins[chunkIndex];
+        var max = (int)zoneMapData.Maxs[chunkIndex];
+
+        // Test if the chunk's [min, max] range overlaps with the predicate's acceptable range
+        return Operator switch
+        {
+            ComparisonOperator.Equal => Value >= min && Value <= max,
+            ComparisonOperator.NotEqual => true, // Can't skip - might have both matching and non-matching values
+            ComparisonOperator.LessThan => min < Value, // Skip if all values >= Value
+            ComparisonOperator.LessThanOrEqual => min <= Value,
+            ComparisonOperator.GreaterThan => max > Value, // Skip if all values <= Value
+            ComparisonOperator.GreaterThanOrEqual => max >= Value,
+            _ => true
+        };
     }
 
     private void EvaluateInt32RangeSimd(Int32Array array, ref SelectionBitmap selection, int startIndex, int endIndex)
@@ -684,6 +725,33 @@ public sealed class DoubleComparisonPredicate : ColumnPredicate
         base.EvaluateRange(column, ref selection, startIndex, endIndex);
     }
 
+    /// <summary>
+    /// Tests if a chunk can potentially contain matching rows based on zone map min/max values.
+    /// </summary>
+    public override bool MayContainMatches(ColumnZoneMapData? zoneMapData, int chunkIndex)
+    {
+        if (zoneMapData == null || zoneMapData.Type != ZoneMapType.Double)
+            return true; // No zone map available, must evaluate
+
+        if (zoneMapData.AllNulls[chunkIndex])
+            return false; // All nulls, predicate will fail
+
+        var min = (double)zoneMapData.Mins[chunkIndex];
+        var max = (double)zoneMapData.Maxs[chunkIndex];
+
+        // Test if the chunk's [min, max] range overlaps with the predicate's acceptable range
+        return Operator switch
+        {
+            ComparisonOperator.Equal => Value >= min && Value <= max,
+            ComparisonOperator.NotEqual => true, // Can't skip - might have both matching and non-matching values
+            ComparisonOperator.LessThan => min < Value,
+            ComparisonOperator.LessThanOrEqual => min <= Value,
+            ComparisonOperator.GreaterThan => max > Value,
+            ComparisonOperator.GreaterThanOrEqual => max >= Value,
+            _ => true
+        };
+    }
+
     private void EvaluateDoubleRangeSimd(DoubleArray array, ref SelectionBitmap selection, int startIndex, int endIndex)
     {
         var values = array.Values;
@@ -811,6 +879,33 @@ public sealed class DecimalComparisonPredicate : ColumnPredicate
             ComparisonOperator.GreaterThan => columnValue > Value,
             ComparisonOperator.GreaterThanOrEqual => columnValue >= Value,
             _ => false
+        };
+    }
+
+    /// <summary>
+    /// Tests if a chunk can potentially contain matching rows based on zone map min/max values.
+    /// </summary>
+    public override bool MayContainMatches(ColumnZoneMapData? zoneMapData, int chunkIndex)
+    {
+        if (zoneMapData == null || zoneMapData.Type != ZoneMapType.Decimal)
+            return true; // No zone map available, must evaluate
+
+        if (zoneMapData.AllNulls[chunkIndex])
+            return false; // All nulls, predicate will fail
+
+        var min = (decimal)zoneMapData.Mins[chunkIndex];
+        var max = (decimal)zoneMapData.Maxs[chunkIndex];
+
+        // Test if the chunk's [min, max] range overlaps with the predicate's acceptable range
+        return Operator switch
+        {
+            ComparisonOperator.Equal => Value >= min && Value <= max,
+            ComparisonOperator.NotEqual => true, // Can't skip - might have both matching and non-matching values
+            ComparisonOperator.LessThan => min < Value,
+            ComparisonOperator.LessThanOrEqual => min <= Value,
+            ComparisonOperator.GreaterThan => max > Value,
+            ComparisonOperator.GreaterThanOrEqual => max >= Value,
+            _ => true
         };
     }
 }
