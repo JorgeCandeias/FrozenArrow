@@ -1,5 +1,8 @@
 # FrozenArrow Query Profiling
 
+> **?? For AI-Assisted Development**: This tool is the **primary verification method** for all optimization work in FrozenArrow.  
+> See "Usage for AI-Assisted Optimization" section below for the mandatory workflow.
+
 This directory contains a profiling tool for diagnosing performance characteristics of ArrowQuery operations. It provides detailed timing breakdowns, phase analysis, and comparison capabilities.
 
 ## Purpose
@@ -215,17 +218,384 @@ Based on this baseline, the following optimizations would have the highest impac
 
 ## Usage for AI-Assisted Optimization
 
-When using this tool for AI-assisted optimization:
+> **?? This is the MANDATORY process for all optimization work in FrozenArrow.**
 
-1. **Establish baseline**: `dotnet run -c Release -- -s all -r 1000000 --save baseline.json`
-2. **Make changes** to the query engine
-3. **Compare**: `dotnet run -c Release -- -s all -r 1000000 -c baseline.json`
-4. **Drill down**: `dotnet run -c Release -- -s <scenario> -v` for specific phase analysis
+The profiling tool provides fast, objective verification of optimizations during development. 
+This complements BenchmarkDotNet (for final validation) and unit tests (for correctness).
 
-The JSON output format is designed for easy parsing:
+### Standard Workflow
+
+#### 1. Establish Baseline (Before Making Changes)
+
+**Always capture baseline before any code changes:**
+
 ```bash
-dotnet run -c Release -- -s filter -o json | jq '.[] | {scenario: .scenarioName, median: .medianMicroseconds}'
+cd profiling/FrozenArrow.Profiling
+dotnet run -c Release -- -s all -r 1000000 --save baseline-YYYY-MM-DD-optimization-name.json
 ```
+
+**Example naming conventions:**
+- `baseline-2024-01-15-zone-maps.json`
+- `baseline-2024-01-20-null-bitmap-batch.json`
+- `baseline-2024-01-25-predicate-reorder.json`
+
+**Store in**: `profiling/FrozenArrow.Profiling/baselines/` directory
+
+#### 2. Make Changes
+
+- Implement the optimization
+- Ensure `dotnet build` succeeds
+- Run relevant unit tests: `dotnet test`
+- Add inline comments explaining non-obvious performance tricks
+
+#### 3. Compare Performance
+
+**After implementing changes, compare against baseline:**
+
+```bash
+dotnet run -c Release -- -s all -r 1000000 -c baseline-YYYY-MM-DD-optimization-name.json
+```
+
+**The comparison output will show:**
+- ? **Improvements** (green): Scenarios that got faster
+- ?? **Regressions** (red): Scenarios that got slower  
+- ?? **Neutral** (gray): Scenarios with <5% change
+
+#### 4. Drill Down on Issues
+
+**If any scenario regressed or didn't improve as expected:**
+
+```bash
+# Get detailed phase-level breakdown
+dotnet run -c Release -- -s <scenario> -v
+
+# Example: investigate why filter didn't improve
+dotnet run -c Release -- -s filter -v
+```
+
+The `-v` flag shows which **specific phases** consumed time, helping identify:
+- Which part of the optimization worked
+- Which part didn't work as expected
+- Where regressions were introduced
+
+#### 5. Document Results
+
+**Include performance numbers in:**
+- **Commit message**: Key improvements and any regressions with justification
+- **PR description**: Full comparison output from step 3
+- **Technical docs**: Expected improvements and when they apply
+- **Summary document**: High-level overview for stakeholders
+
+---
+
+### Interpreting Results
+
+#### ? Successful Optimization
+```
+Scenario: Filter
+  Baseline: 4,600 ?s
+  Current:  2,100 ?s
+  Change:   -54.3% (2.19x faster) ?
+  
+Allocated:
+  Baseline: 34 KB
+  Current:  34 KB
+  Change:   +0.0% (same)
+```
+
+**Action**: Document this success! No regressions, significant improvement.
+
+#### ?? Regression to Investigate
+```
+Scenario: Aggregate
+  Baseline: 788 ?s
+  Current:  985 ?s
+  Change:   +25.0% (slower) ??
+```
+
+**Action**: Drill down with `-v` flag:
+```bash
+dotnet run -c Release -- -s aggregate -v
+```
+
+This shows phase breakdown to identify which part regressed.
+
+#### ?? Acceptable Trade-off
+```
+Scenario: Filter
+  Baseline: 4,600 ?s
+  Current:  2,100 ?s
+  Change:   -54.3% (2.19x faster) ?
+
+Scenario: Enumeration
+  Baseline: 104,388 ?s
+  Current:  107,200 ?s
+  Change:   +2.7% (slower) ??
+```
+
+**Rationale**: 54% improvement in common operation (filter) is worth 2.7% regression in rare operation (full enumeration).
+
+**Action**: Document the trade-off in commit message and technical docs.
+
+#### ?? Red Flag - Stop and Investigate
+```
+Scenario: Filter
+  Baseline: 4,600 ?s
+  Current:  4,550 ?s
+  Change:   -1.1% (minimal improvement) ??
+```
+
+**Problem**: Expected 20-50% improvement, only saw 1.1%.
+
+**Action**: 
+1. Verify the optimization is actually being used (add logging/breakpoints)
+2. Check if test data triggers the optimization (might need different query)
+3. Profile with `-v` to see if optimization path is taken
+
+---
+
+### Required Scenarios by Optimization Type
+
+Not all scenarios need to be tested for every change. Focus on relevant ones:
+
+| Optimization Area | Required Scenarios | Optional Scenarios |
+|-------------------|--------------------|--------------------|
+| **Predicate/Filter** | `filter`, `predicate` | `bitmap`, `fused` |
+| **Aggregation** | `aggregate`, `fused` | `filter`, `parallel` |
+| **GroupBy** | `groupby` | `aggregate` |
+| **Parallelization** | `parallel`, `filter` | `all` |
+| **General/Unknown** | `all` | - |
+| **Bitmap Operations** | `bitmap`, `filter` | `predicate` |
+
+**Example**: If optimizing SIMD predicates, run: `filter`, `predicate`, and optionally `bitmap`.
+
+---
+
+### Baseline Management
+
+**Organize baselines by date and optimization:**
+
+```
+profiling/FrozenArrow.Profiling/baselines/
+  ??? baseline-2024-01-15-zone-maps.json
+  ??? baseline-2024-01-20-null-bitmap-batch.json
+  ??? baseline-2024-01-25-predicate-reorder.json
+  ??? baseline-2024-01-30-bloom-filters.json
+  ??? baseline-latest.json  # symlink to most recent baseline
+```
+
+**Best practices:**
+- Keep baselines in version control (they're small JSON files)
+- Name by date + optimization for easy tracking
+- Compare new work against relevant baseline (not just latest)
+- Create new baseline after major changes
+
+---
+
+### Acceptance Criteria
+
+Before merging an optimization, verify:
+
+? **Target scenario improved** by >5% (preferably >20%)  
+? **No unrelated scenarios regressed** by >5% without justification  
+? **Memory allocation stayed same** or decreased (or increase justified)  
+? **Phase breakdown shows** optimization in correct place  
+? **Documentation includes** verified before/after numbers
+
+### Red Flags ??
+
+**Stop and investigate if you see:**
+
+? **Target scenario <5% improvement**  
+   ? Optimization may not be working or test data doesn't trigger it
+
+? **Multiple unrelated scenarios regress >10%**  
+   ? Likely introduced a bug or algorithmic issue
+
+? **Memory allocation increases >50%**  
+   ? Check for unexpected allocations, missing ArrayPool returns
+
+? **Any scenario becomes >2x slower**  
+   ? Critical regression, investigate immediately
+
+? **Improvement in one phase, regression in another**  
+   ? May have shifted bottleneck; use `-v` to understand
+
+---
+
+### Quick Command Reference
+
+```bash
+# List all available scenarios
+dotnet run -c Release -- --list
+
+# Quick single-scenario test (for rapid iteration)
+dotnet run -c Release -- -s filter -r 1000000
+
+# Full baseline capture (mandatory before changes)
+dotnet run -c Release -- -s all -r 1000000 --save baseline.json
+
+# Compare after changes (mandatory after changes)
+dotnet run -c Release -- -s all -r 1000000 -c baseline.json
+
+# Phase-level breakdown for investigation
+dotnet run -c Release -- -s aggregate -v
+
+# Different row counts for scaling analysis
+dotnet run -c Release -- -s filter -r 10000    # Small dataset
+dotnet run -c Release -- -s filter -r 1000000  # Large dataset
+
+# JSON output for scripting/automation
+dotnet run -c Release -- -s all -o json > results.json
+
+# Disable parallel to isolate sequential performance
+dotnet run -c Release -- -s filter --no-parallel
+```
+
+---
+
+### Integration with BenchmarkDotNet
+
+**Use profiling tool for:**
+- ? Development-time iteration (fast feedback, <5 seconds)
+- ? Catching regressions early
+- ? Understanding phase-level bottlenecks
+- ? Comparing before/after quickly
+
+**Use BenchmarkDotNet for:**
+- ? Final validation with statistical rigor
+- ? Publishing results to community
+- ? Cross-version comparisons
+- ? Multiple dataset sizes and configurations
+
+**Recommended workflow:**
+1. **Profiling tool** - Iterate during development (run 20+ times)
+2. **Unit tests** - Verify correctness
+3. **Profiling tool** - Final verification before commit
+4. **BenchmarkDotNet** - Validate before PR/release
+5. **Profiling tool** - Regression testing in CI/CD
+
+---
+
+### CI/CD Integration (Future)
+
+The profiling tool is designed for CI/CD integration:
+
+```bash
+# In CI pipeline, compare PR against master baseline
+dotnet run -c Release -- -s all -r 1000000 -c baseline-master.json -o json > pr-results.json
+
+# Parse results to fail PR if regression >10%
+jq '.[] | select(.percentChange > 10.0)' pr-results.json
+```
+
+---
+
+### Example: Zone Map Optimization Session
+
+Here's a real example of how the profiling tool was used for the zone map optimization:
+
+#### 1. Establish Baseline
+```bash
+$ dotnet run -c Release -- -s all -r 1000000 --save baseline-before-zonemaps.json
+
+Scenario           Median (?s)   Allocated
+????????????????????????????????????????????
+Filter             4,600         34 KB
+Aggregate          788           18 KB
+# ... other scenarios
+```
+
+#### 2. Implement Zone Maps
+- Added `ZoneMap.cs` with min/max per chunk
+- Modified `ColumnPredicate` to test zone maps
+- Updated `ParallelQueryExecutor` to skip chunks
+
+#### 3. Compare Results
+```bash
+$ dotnet run -c Release -- -s all -r 1000000 -c baseline-before-zonemaps.json
+
+Scenario: Filter
+  Baseline: 4,600 ?s
+  Current:  1,200 ?s      # ? 3.8x faster!
+  Change:   -73.9%
+
+Scenario: Aggregate  
+  Baseline: 788 ?s
+  Current:  792 ?s        # ?? Neutral (no regression)
+  Change:   +0.5%
+```
+
+#### 4. Verify with Verbose
+```bash
+$ dotnet run -c Release -- -s filter -v
+
+Phase Breakdown:
+  MultiFilter      : 450 ?s   (was 2,120 ?s) ?
+  HighSelectivity  : 380 ?s   (was 1,472 ?s) ?
+  LowSelectivity   : 370 ?s   (was 962 ?s)   ??
+```
+
+**Analysis**: Zone maps helped selective queries (first two) significantly, as expected. 
+Low selectivity queries can't skip much, but no regression either.
+
+#### 5. Document
+- Commit message: "Add zone map skip-scanning: 3.8x faster for selective filters"
+- Created `docs/optimizations/ZoneMapOptimization.md`
+- Added benchmarks in `benchmarks/FrozenArrow.Benchmarks/Internals/ZoneMapBenchmarks.cs`
+
+---
+
+### Troubleshooting
+
+**Problem**: "Baseline file not found"
+```bash
+Error: Could not load baseline file: baseline.json
+```
+**Solution**: Check the file path, ensure you're in the correct directory, and the baseline file exists.
+
+**Problem**: "No improvement shown, but optimization should help"
+```bash
+Scenario: Filter
+  Change: +0.2% (no change)
+```
+**Possible causes:**
+1. Test data doesn't trigger optimization (e.g., zone maps need selective predicates)
+2. Optimization not being executed (add logging to verify)
+3. Overhead of optimization equals the benefit (check with `-v`)
+
+**Problem**: "Unexpected regression in unrelated scenario"
+```bash
+Scenario: Bitmap
+  Change: +45.0% (slower) ??
+```
+**Action**: Use `-v` to identify which phase regressed, then investigate why.
+
+---
+
+### Tips for Effective Profiling
+
+1. **Always warm up** - Default 2 warmup iterations are usually sufficient
+2. **Use consistent dataset size** - 1M rows is standard for comparisons
+3. **Run on same machine** - Performance varies across machines
+4. **Close other apps** - Minimize background interference
+5. **Multiple runs for outliers** - Increase iterations (`-i 10`) if results vary
+6. **Save every baseline** - Disk space is cheap, recreating baselines is expensive
+7. **Compare apples to apples** - Same row count, same scenario
+
+---
+
+## Summary for AI Assistants
+
+When asked to optimize FrozenArrow:
+
+1. ? **Always establish baseline first** - Never skip this step
+2. ? **Run appropriate scenarios** - Not all scenarios needed for every change  
+3. ? **Compare objectively** - Let numbers guide decisions, not intuition
+4. ? **Drill down on surprises** - Use `-v` to understand unexpected results
+5. ? **Document thoroughly** - Include profiling results in all optimization docs
+
+**The profiling tool is your objective truth** - Trust it more than intuition! ??
 
 ---
 
