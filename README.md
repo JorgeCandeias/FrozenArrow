@@ -939,15 +939,15 @@ For comprehensive benchmark results, see:
 - **[Memory Analysis](benchmarks/FrozenArrow.MemoryAnalysis/README.md)** - Static footprint, query overhead, wide model analysis
 - **[Query Profiling](profiling/FrozenArrow.Profiling/README.md)** - Detailed query execution profiling and phase analysis
 
-### Query Execution Profile (500K rows)
+### Query Execution Profile (1M rows)
 
 | Component | Time | Throughput |
 |-----------|------|------------|
-| Bitmap operations | 282 μs | 1,775 M rows/s |
-| Simple aggregates | 551 μs | 877 M rows/s |
-| Fused filter+aggregate | 1.8 ms | 283 M rows/s |
-| Predicate evaluation | 4.6 ms | 108 M rows/s |
-| Parallel speedup | 6.74x | on 24 cores |
+| Bitmap operations | 571 μs | 1,750 M rows/s |
+| Simple aggregates | 765 μs | 1,308 M rows/s |
+| Predicate evaluation | 4.4 ms | 227 M rows/s |
+| Filter (3 predicates) | 4.6 ms | 217 M rows/s |
+| Parallel speedup | 8.55x | on 24 cores |
 
 ### Running Benchmarks
 
@@ -958,8 +958,8 @@ dotnet run -c Release --project benchmarks/FrozenArrow.Benchmarks -- --filter *F
 # Run memory analysis
 dotnet run -c Release --project benchmarks/FrozenArrow.MemoryAnalysis
 
-# Run query profiling
-dotnet run -c Release --project profiling/FrozenArrow.Profiling -- -s all -r 500000 -v
+# Run query profiling (1M rows baseline)
+dotnet run -c Release --project profiling/FrozenArrow.Profiling -- -s all -r 1000000 -v
 ```
 
 ## License

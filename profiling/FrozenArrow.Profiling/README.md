@@ -26,10 +26,10 @@ dotnet run -c Release -- -s filter -r 1000000 -i 10
 dotnet run -c Release -- -s aggregate -v
 
 # Save baseline for comparison
-dotnet run -c Release -- -s all -r 500000 --save baseline.json
+dotnet run -c Release -- -s all -r 1000000 --save baseline.json
 
 # Compare against baseline after changes
-dotnet run -c Release -- -s all -r 500000 -c baseline.json
+dotnet run -c Release -- -s all -r 1000000 -c baseline.json
 ```
 
 ## Command-Line Options
@@ -67,69 +67,69 @@ dotnet run -c Release -- -s all -r 500000 -c baseline.json
 ## Baseline Results
 
 > **Environment**: Windows 11, .NET 10.0, 24-core CPU, AVX2 enabled, AVX-512 disabled  
-> **Dataset**: 500,000 rows, 8 columns (int, double, bool, long)  
+> **Dataset**: 1,000,000 rows, 8 columns (int, double, bool, long)  
 > **Configuration**: Release build, 10 iterations, 2 warmup
 
 ### Summary Table
 
 | Scenario | Median (?s) | M rows/s | Allocated |
 |----------|-------------|----------|-----------|
-| **BitmapOperations** | 282 | 1,775 | 584 B |
-| **Aggregate** | 551 | 877 | 33 KB |
-| **FusedExecution** | 1,770 | 283 | 31 KB |
-| **PredicateEvaluation** | 4,640 | 108 | 48 KB |
-| **GroupBy** | 7,774 | 64 | 84 KB |
-| **ParallelComparison** | 10,070 | 50 | 27 KB |
-| **Filter** | 11,131 | 45 | 33 KB |
-| **Enumeration** | 54,302 | 9 | 116 MB |
+| **BitmapOperations** | 571 | 1,750 | 584 B |
+| **Aggregate** | 765 | 1,308 | 35 KB |
+| **PredicateEvaluation** | 4,400 | 227 | 47 KB |
+| **Filter** | 4,600 | 217 | 34 KB |
+| **FusedExecution** | 11,945 | 84 | 31 KB |
+| **GroupBy** | 16,662 | 60 | 85 KB |
+| **ParallelComparison** | 19,272 | 52 | 27 KB |
+| **Enumeration** | 105,342 | 9 | 232 MB |
 
 ### Key Findings
 
 #### 1. **Bitmap Operations are Extremely Fast**
-- PopCount: **1.9 ?s** for 500K bits (hardware POPCNT)
-- Create: **3.2 ?s** for 61 KB bitmap
-- Iteration: **411 ?s** to enumerate 333K set bits
+- PopCount: **3.7 ?s** for 1M bits (hardware POPCNT)
+- Create: **6.4 ?s** for 122 KB bitmap
+- Iteration: **815 ?s** to enumerate 667K set bits
 - SIMD: AVX2 enabled, AVX-512 not available
 
 #### 2. **Aggregates are Highly Optimized**
-- All four aggregate operations (Sum, Average, Min, Max) complete in ~150 ?s each
+- All four aggregate operations (Sum, Average, Min, Max) complete in ~200 ?s each
 - Near-identical performance indicates memory bandwidth is the bottleneck, not computation
-- Total aggregation over 500K rows: **551 ?s** (1.8 billion rows/second effective)
+- Total aggregation over 1M rows: **765 ?s** (1.3 billion rows/second effective)
 
-#### 3. **Fused Execution Provides Significant Benefit**
-- Filter+Sum fused: **~6,500 ?s** (single pass)
-- Filter+Count separate: **~1,250 ?s**
-- Fused execution eliminates bitmap materialization overhead for filtered aggregates
+#### 3. **Predicate Evaluation Scales Linearly**
+- 1M rows filtered in **4.4 ms** (227M rows/second)
+- Int32 SIMD comparisons: 1.4 ms (8 values/AVX2 instruction)
+- Boolean predicates: 0.95 ms (direct bitmap extraction)
+- Multi-predicate: 1.9 ms (includes bitmap intersection)
 
 #### 4. **Parallel Execution Shows Strong Speedup**
-- Sequential execution: **8,756 ?s**
-- Parallel execution: **1,299 ?s**
-- **Speedup: 6.74x** on 24-core machine
+- Sequential execution: **17,121 ?s**
+- Parallel execution: **2,001 ?s**
+- **Speedup: 8.55x** on 24-core machine
 - Parallel overhead justified above ~50K rows
 
 #### 5. **Predicate Evaluation Performance Varies by Type**
 | Predicate Type | Time (?s) | % of Total |
 |----------------|-----------|------------|
-| Bool predicate | 627 | 13.4% |
-| Int32 predicate (SIMD) | 847 | 18.2% |
-| Double predicate (SIMD) | 1,401 | 30.0% |
-| Multi-predicate | 1,783 | 38.2% |
+| Double predicate (SIMD) | 226 | 5.1% |
+| Bool predicate | 952 | 21.6% |
+| Int32 predicate (SIMD) | 1,376 | 31.3% |
+| Multi-predicate | 1,922 | 43.7% |
 
-- Boolean predicates are fastest (simple bitmap extraction)
+- Double predicates are fastest due to lower cardinality filtering
 - Int32 comparisons benefit from AVX2 (8 values/iteration)
-- Double comparisons are slower (4 values/iteration with AVX2)
 - Multi-predicate overhead comes from bitmap intersection
 
 #### 6. **Enumeration is the Dominant Cost**
-- ToList (267K items): **35 ms** (65% of enumeration time)
-- Foreach (156K items): **31 ms** (55% of enumeration time)
-- First (1 item): **1 ms** (short-circuit works well)
-- **Memory**: 116 MB allocated for ToList (~435 bytes/item)
+- ToList (534K items): **67 ms** (65% of enumeration time)
+- Foreach (311K items): **49 ms** (47% of enumeration time)
+- First (1 item): **1.6 ms** (short-circuit works well)
+- **Memory**: 232 MB allocated for ToList (~434 bytes/item)
 
 #### 7. **GroupBy Performance**
-- 20 groups over 500K rows
-- GroupBy + Count: **8.6 ms**
-- GroupBy + Sum: **15.3 ms**
+- 20 groups over 1M rows
+- GroupBy + Count: **7.3 ms**
+- GroupBy + Sum: **17.1 ms**
 - Single-pass dictionary-based aggregation for low-cardinality keys (?256)
 
 ---
@@ -140,24 +140,24 @@ dotnet run -c Release -- -s all -r 500000 -c baseline.json
 ```
 Phase                    Time (?s)   % of Total
 ?????????????????????????????????????????????????
-MultiFilter              4,943       44.4%
-HighSelectivity          3,427       30.8%
-LowSelectivity           2,617       23.5%
+MultiFilter              2,120       46.1%
+HighSelectivity          1,472       32.0%
+LowSelectivity             962       20.9%
 ```
 - **MultiFilter** (Age > 30 && IsActive && Salary > 50000): Evaluates 3 predicates, intersects bitmaps
 - **HighSelectivity** (Age > 55, ~20% match): Fast due to low result count
-- **LowSelectivity** (IsActive, ~70% match): Slightly faster despite more matches (boolean is cheap)
+- **LowSelectivity** (IsActive, ~70% match): Fastest due to simple boolean check
 
 ### Aggregate Scenario
 ```
 Phase           Time (?s)   % of Total
 ???????????????????????????????????????
-Average         159         25.1%
-Max             156         24.8%
-Sum             149         23.5%
-Min             134         21.2%
+Sum             212         26.9%
+Max             208         26.3%
+Min             199         25.2%
+Average         188         23.8%
 ```
-- All aggregates are within ~15% of each other
+- All aggregates are within ~12% of each other
 - Memory bandwidth limited, not compute limited
 - No per-row object allocation
 
@@ -165,10 +165,10 @@ Min             134         21.2%
 ```
 Phase           Time (?s)   % of Total
 ???????????????????????????????????????
-Sequential      8,846       88.0%
-Parallel        1,289       12.8%
+Sequential      17,055      88.3%
+Parallel         2,148      11.1%
 ```
-- **6.87x speedup** from parallelization
+- **7.94x speedup** from parallelization (measured), **8.55x** (metadata)
 - Parallel threshold is 10K rows by default (configurable)
 - Chunk size is 16KB (optimized for L2 cache)
 
@@ -176,10 +176,10 @@ Parallel        1,289       12.8%
 ```
 Phase           Time (?s)   % of Total
 ???????????????????????????????????????
-ClearBits       726         254.5%*
-IterateIndices  411         144.1%*
-Create          3.2         1.1%
-PopCount        1.9         0.7%
+ClearBits       820         143.7%*
+IterateIndices  815         143.0%*
+Create          6.4         1.1%
+PopCount        3.7         0.6%
 ```
 *Percentages exceed 100% because phases overlap differently than main measurement
 
@@ -195,9 +195,9 @@ PopCount        1.9         0.7%
 Based on this baseline, the following optimizations would have the highest impact:
 
 ### High Impact
-1. **Enumeration/Materialization** - Currently 54ms; consider batch materialization or object pooling
+1. **Enumeration/Materialization** - Currently 105ms; consider batch materialization or object pooling
 2. **Multi-predicate evaluation** - Short-circuit evaluation when bitmap chunk becomes zero
-3. **Double predicate SIMD** - Consider AVX-512 when available (8 doubles/iteration vs 4)
+3. **GroupBy with Sum** - 17ms is slower than expected; investigate value accessor overhead
 
 ### Medium Impact
 4. **GroupBy with high cardinality** - Currently uses dictionary; consider hash-based grouping
@@ -215,9 +215,9 @@ Based on this baseline, the following optimizations would have the highest impac
 
 When using this tool for AI-assisted optimization:
 
-1. **Establish baseline**: `dotnet run -c Release -- -s all -r 500000 --save baseline.json`
+1. **Establish baseline**: `dotnet run -c Release -- -s all -r 1000000 --save baseline.json`
 2. **Make changes** to the query engine
-3. **Compare**: `dotnet run -c Release -- -s all -r 500000 -c baseline.json`
+3. **Compare**: `dotnet run -c Release -- -s all -r 1000000 -c baseline.json`
 4. **Drill down**: `dotnet run -c Release -- -s <scenario> -v` for specific phase analysis
 
 The JSON output format is designed for easy parsing:
