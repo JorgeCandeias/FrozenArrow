@@ -64,6 +64,7 @@ dotnet run -c Release -- -s all -r 1000000 -c baseline.json
 | `bitmap` | SelectionBitmap operations |
 | `predicate` | Predicate evaluation (SIMD vs scalar) |
 | `enumeration` | Result materialization (ToList, foreach) |
+| `shortcircuit` | Any/First with early-exit streaming evaluation |
 | `all` | Run all scenarios |
 
 ---
@@ -72,27 +73,30 @@ dotnet run -c Release -- -s all -r 1000000 -c baseline.json
 
 > **Environment**: Windows 11, .NET 10.0, 24-core CPU, AVX2 enabled, AVX-512 disabled  
 > **Dataset**: 1,000,000 rows, 8 columns (int, double, bool, long)  
-> **Configuration**: Release build, 10 iterations, 2 warmup
+> **Configuration**: Release build, 10 iterations, 2 warmup  
+> **Last Updated**: 2025-01-27 (after null bitmap batch + dense block SIMD + short-circuit optimizations)
 
 ### Summary Table
 
 | Scenario | Median (탎) | M rows/s | Allocated |
 |----------|-------------|----------|-----------|
-| **BitmapOperations** | 568 | 1,759 | 584 B |
-| **Aggregate** | 788 | 1,269 | 18 KB |
-| **PredicateEvaluation** | 5,436 | 184 | 47 KB |
-| **FusedExecution** | 5,152 | 194 | 16 KB |
-| **Filter** | 4,600 | 217 | 34 KB |
-| **GroupBy** | 15,583 | 64 | 85 KB |
-| **ParallelComparison** | 22,513 | 44 | 27 KB |
-| **Enumeration** | 104,388 | 10 | 232 MB |
+| **BitmapOperations** | 566 | 1,765 | 24 B |
+| **Aggregate** | 3,157 | 317 | 77 KB |
+| **SparseAggregation** | 28,425 | 35 | 396 KB |
+| **PredicateEvaluation** | 9,834 | 102 | 45 KB |
+| **FusedExecution** | 10,066 | 99 | 58 KB |
+| **Filter** | 8,374 | 119 | 39 KB |
+| **GroupBy** | 25,577 | 39 | 63 KB |
+| **ParallelComparison** | 24,549 | 41 | 56 KB |
+| **ShortCircuit** | 28,644 | 35 | 125 KB |
+| **Enumeration** | 106,424 | 9 | 116 MB |
 
 ### Key Findings
 
 #### 1. **Bitmap Operations are Extremely Fast**
-- PopCount: **3.7 ?s** for 1M bits (hardware POPCNT)
-- Create: **5.7 ?s** for 122 KB bitmap
-- Iteration: **665 ?s** to enumerate 667K set bits
+- PopCount: **3.7 탎** for 1M bits (hardware POPCNT)
+- Create: **5.7 탎** for 122 KB bitmap
+- Iteration: **665 탎** to enumerate 667K set bits
 - SIMD: AVX2 enabled, AVX-512 not available
 
 #### 2. **Aggregates Use Block-Based SIMD**
@@ -201,17 +205,17 @@ This scenario specifically tests the **block-based bitmap iteration optimization
 ```
 Phase                Time (탎)   % of Total   Selection Rate
 ??????????????????????????????????????????????????????????????
-Sum1PctFilter        13,467      31.9%        2.2% (22K rows)
-Sum10PctFilter       13,307      31.6%        8.9% (89K rows)
-Sum50PctFilter       13,745      32.6%        48.9% (489K rows)
-Sum100PctNoFilter     3,020       7.2%        100% (1M rows)
+Sum1PctFilter         8,459      29.5%        2.2% (22K rows)
+Sum10PctFilter        8,591      29.9%        8.9% (89K rows)
+Sum50PctFilter        9,187      32.0%        48.9% (489K rows)
+Sum100PctNoFilter     2,817       9.8%        100% (1M rows)
 ```
 
 **Key Insights:**
 - **Sparse selections (1-10%)** are nearly as fast as dense (50%) due to block skipping
 - **Block-based iteration** processes 64 bits at a time, skipping empty blocks entirely
-- **No-filter baseline** (3ms) shows aggregation alone is very fast
-- **Predicate evaluation dominates** the filtered cases (~10-13ms overhead)
+- **No-filter baseline** (2.8ms) shows aggregation alone is very fast with SIMD dense block optimization
+- **Predicate evaluation dominates** the filtered cases (~8-9ms overhead)
 
 **How block-based iteration helps sparse selections:**
 | Selection Rate | Empty Blocks | Block Skipping Benefit |
@@ -219,12 +223,46 @@ Sum100PctNoFilter     3,020       7.2%        100% (1M rows)
 | 1% | ~85% | High - most blocks skipped |
 | 10% | ~50% | Moderate - half blocks skipped |
 | 50% | ~5% | Low - few blocks skipped |
-| 100% | 0% | None - all blocks processed |
+| 100% | 0% | None - all blocks processed (SIMD kicks in) |
 
 **Use this scenario to measure:**
 - Block iteration efficiency improvements
 - Predicate evaluation optimizations
 - Sparse access pattern performance
+
+### Short-Circuit Scenario
+
+This scenario tests **streaming predicate evaluation** for operations that can exit early (Any, First, FirstOrDefault).
+
+```
+Phase                    Time (탎)   % of Total   Description
+??????????????????????????????????????????????????????????????????
+AnyEarlyMatch             2,761       8.5%        Match at row 0-10
+AnyRestrictiveMatch       2,730       8.4%        Match within ~100 rows
+FirstEarlyMatch           2,730       8.4%        First() with early match
+AnyMultiPredicate         2,804       8.6%        Multi-predicate, early match
+AnyNoMatch               12,331      37.9%        Full scan, no match found
+FirstOrDefaultNoMatch    12,391      38.1%        Full scan, returns default
+```
+
+**Key Insights:**
+- **Early match is 4-5x faster** than no-match (2.7ms vs 12.3ms)
+- **Streaming evaluation** avoids building full bitmap when match found early
+- **Query parsing overhead** (~2.7ms) dominates for early matches
+- **No-match case** scans all rows sequentially (no SIMD, ~3x slower than parallel)
+
+**When short-circuit helps:**
+| Query Pattern | Benefit | Recommendation |
+|---------------|---------|----------------|
+| `Any()` with likely matches | **4-5x faster** | ? Use streaming |
+| `First()` with likely matches | **4-5x faster** | ? Use streaming |
+| `Any()` expecting no matches | 3x slower | ?? Consider Count() > 0 |
+| Large datasets, early matches | **10-100x faster** | ? Huge benefit |
+
+**Use this scenario to measure:**
+- Short-circuit effectiveness
+- Query parsing overhead
+- Streaming vs bitmap trade-offs
 
 ---
 
@@ -239,13 +277,20 @@ Based on this baseline, the following optimizations would have the highest impac
 ### Medium Impact
 3. **GroupBy with high cardinality** - Currently uses dictionary; consider hash-based grouping
 4. **Bitmap iteration** - Consider PEXT instruction for extracting set bit positions
-5. **Null bitmap pre-intersection** - AND null bitmap with selection before aggregation
+
+### Recently Implemented ? (2025-01-27)
+5. **Null bitmap batch processing** - AND null bitmap with selection in bulk using SIMD  
+   ? See `docs/optimizations/null-bitmap-batch-processing.md`
+6. **Dense block SIMD aggregation** - Use SIMD to sum 64 contiguous values when bitmap block is fully selected  
+   ? See `docs/optimizations/vectorized-dense-block-aggregation.md`
+7. **Lazy bitmap for short-circuit** - Stream predicate evaluation for Any/First operations  
+   ? See `docs/optimizations/lazy-bitmap-short-circuit.md`
 
 ### Already Optimized ?
-6. **Block-based aggregation** - Uses TrailingZeroCount for sparse blocks, SIMD for dense blocks
-7. Bitmap PopCount - Uses hardware POPCNT
-8. Simple aggregates - Near memory bandwidth limit
-9. Boolean predicates - Uses direct bitmap extraction
+8. **Block-based aggregation** - Uses TrailingZeroCount for sparse blocks, SIMD for dense blocks
+9. **Bitmap PopCount** - Uses hardware POPCNT
+10. **Simple aggregates** - Near memory bandwidth limit
+11. **Boolean predicates** - Uses direct bitmap extraction
 
 ---
 
@@ -398,12 +443,15 @@ Not all scenarios need to be tested for every change. Focus on relevant ones:
 | **Sparse/Block Iteration** | `sparseagg`, `aggregate` | `filter`, `bitmap` |
 | **GroupBy** | `groupby` | `aggregate` |
 | **Parallelization** | `parallel`, `filter` | `all` |
+| **Short-circuit (Any/First)** | `shortcircuit` | `filter`, `enumeration` |
 | **General/Unknown** | `all` | - |
 | **Bitmap Operations** | `bitmap`, `filter` | `predicate`, `sparseagg` |
 
 **Example**: If optimizing SIMD predicates, run: `filter`, `predicate`, and optionally `bitmap`.
 
 **Example**: If optimizing block-based iteration, run: `sparseagg`, `aggregate`, and optionally `bitmap`.
+
+**Example**: If optimizing Any/First early-exit, run: `shortcircuit`, and optionally `filter`.
 
 ---
 

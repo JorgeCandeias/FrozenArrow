@@ -917,10 +917,10 @@ FrozenArrow is designed for **memory efficiency**, not raw speed. Here's how it 
 
 | Operation | List | FrozenArrow | DuckDB |
 |-----------|------|-------------|--------|
-| Filter + Count | 4.6 ms | 9.4 ms | **422 μs** |
-| Sum (filtered) | 10.3 ms | 35.6 ms | **601 μs** |
+| Filter + Count | 4.6 ms | 8.4 ms | **422 μs** |
+| Sum (filtered) | 10.3 ms | 28.4 ms | **601 μs** |
 | GroupBy + Count | 23.2 ms | **9.9 ms** | 4.5 ms |
-| Any (short-circuit) | **13 ns** | 6.8 μs | 319 μs |
+| Any (short-circuit) | **13 ns** | 2.8 ms | 319 μs |
 
 ### When to Use Each Technology
 
@@ -943,11 +943,26 @@ For comprehensive benchmark results, see:
 
 | Component | Time | Throughput |
 |-----------|------|------------|
-| Bitmap operations | 568 μs | 1,759 M rows/s |
-| Simple aggregates | 788 μs | 1,269 M rows/s |
-| Predicate evaluation | 5.4 ms | 184 M rows/s |
-| Filter (3 predicates) | 4.6 ms | 217 M rows/s |
-| Parallel speedup | 6.23x | on 24 cores |
+| Bitmap operations | 566 μs | 1,765 M rows/s |
+| Aggregation (100% selectivity) | 2.8 ms | 357 M rows/s |
+| Sparse aggregation (1-50% selectivity) | 8-9 ms | 100-125 M rows/s |
+| Predicate evaluation | 9.8 ms | 102 M rows/s |
+| Filter (3 predicates) | 8.4 ms | 119 M rows/s |
+| Short-circuit Any (early match) | 2.8 ms | 357 M rows/s |
+| Short-circuit Any (no match) | 12.3 ms | 81 M rows/s |
+| Parallel speedup | 6.2x | on 24 cores |
+
+### Recent Optimizations (2025-01-27)
+
+The following optimizations have been implemented:
+
+| Optimization | Benefit | Details |
+|--------------|---------|---------|
+| **Null bitmap batch processing** | 14.5% faster sparse aggregation | SIMD bulk-AND of null bitmap with selection |
+| **Dense block SIMD aggregation** | 17% faster 100% selectivity sum | AVX2 vectorized sum for fully-selected blocks |
+| **Lazy bitmap short-circuit** | 4-5x faster Any/First with matches | Streaming evaluation avoids full bitmap |
+
+See `docs/optimizations/` for detailed technical documentation.
 
 ### Running Benchmarks
 
