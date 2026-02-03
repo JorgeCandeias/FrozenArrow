@@ -138,6 +138,75 @@ public static class ArrowQueryExtensions
     }
 
     /// <summary>
+    /// Configures parallel execution options for the query.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Parallel execution can significantly improve query performance on large datasets
+    /// by evaluating predicates across multiple CPU cores simultaneously. The data is
+    /// partitioned into chunks, and each chunk is processed independently.
+    /// </para>
+    /// <para>
+    /// Example:
+    /// <code>
+    /// var results = collection
+    ///     .AsQueryable()
+    ///     .WithParallelOptions(new ParallelQueryOptions
+    ///     {
+    ///         ChunkSize = 32_768,           // 32K rows per chunk
+    ///         MaxDegreeOfParallelism = 4    // Use up to 4 threads
+    ///     })
+    ///     .Where(x => x.Age > 30 &amp;&amp; x.Category == "Premium")
+    ///     .ToList();
+    /// </code>
+    /// </para>
+    /// </remarks>
+    /// <typeparam name="T">The element type of the query.</typeparam>
+    /// <param name="query">The query to configure.</param>
+    /// <param name="options">The parallel execution options.</param>
+    /// <returns>The same query with the specified parallel options.</returns>
+    public static IQueryable<T> WithParallelOptions<T>(this IQueryable<T> query, ParallelQueryOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (query is ArrowQuery<T> arrowQuery)
+        {
+            if (arrowQuery.Provider is ArrowQueryProvider provider)
+            {
+                provider.ParallelOptions = options;
+            }
+        }
+
+        return query;
+    }
+
+    /// <summary>
+    /// Enables parallel execution for the query with default options.
+    /// </summary>
+    /// <typeparam name="T">The element type of the query.</typeparam>
+    /// <param name="query">The query to configure.</param>
+    /// <returns>The same query with parallel execution enabled.</returns>
+    public static IQueryable<T> AsParallel<T>(this IQueryable<T> query)
+    {
+        return query.WithParallelOptions(ParallelQueryOptions.Default);
+    }
+
+    /// <summary>
+    /// Disables parallel execution for the query, forcing sequential evaluation.
+    /// </summary>
+    /// <remarks>
+    /// This can be useful for debugging or when parallel overhead is not beneficial
+    /// for smaller datasets.
+    /// </remarks>
+    /// <typeparam name="T">The element type of the query.</typeparam>
+    /// <param name="query">The query to configure.</param>
+    /// <returns>The same query with parallel execution disabled.</returns>
+    public static IQueryable<T> AsSequential<T>(this IQueryable<T> query)
+    {
+        return query.WithParallelOptions(new ParallelQueryOptions { EnableParallelExecution = false });
+    }
+
+    /// <summary>
     /// Computes multiple aggregates over the query results in a single pass.
     /// </summary>
     /// <remarks>

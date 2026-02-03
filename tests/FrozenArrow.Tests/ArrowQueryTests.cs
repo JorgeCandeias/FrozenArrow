@@ -1162,4 +1162,162 @@ public class ArrowQueryTests
     }
 
     #endregion
+
+    #region Parallel Execution Tests
+
+    private static FrozenArrow<QueryTestRecord> CreateLargeTestCollection(int count)
+    {
+        var records = new List<QueryTestRecord>();
+        var categories = new[] { "Engineering", "Management", "Marketing", "Executive", "Operations" };
+        var random = new Random(42); // Fixed seed for reproducibility
+
+        for (int i = 0; i < count; i++)
+        {
+            records.Add(new QueryTestRecord
+            {
+                Id = i,
+                Name = $"Person{i}",
+                Age = 20 + (i % 50), // Ages 20-69
+                Salary = 40000m + (i % 100) * 1000m,
+                IsActive = i % 3 != 0, // ~67% active
+                Category = categories[i % categories.Length]
+            });
+        }
+
+        return records.ToFrozenArrow();
+    }
+
+    [Fact]
+    public void ParallelExecution_ProducesSameResultsAsSequential_Count()
+    {
+        // Arrange
+        using var collection = CreateLargeTestCollection(100_000);
+
+        // Act - Sequential
+        var sequentialResult = collection
+            .AsQueryable()
+            .AsSequential()
+            .Where(x => x.Age > 30)
+            .Count();
+
+        // Act - Parallel
+        var parallelResult = collection
+            .AsQueryable()
+            .AsParallel()
+            .Where(x => x.Age > 30)
+            .Count();
+
+        // Assert
+        Assert.Equal(sequentialResult, parallelResult);
+    }
+
+    [Fact]
+    public void ParallelExecution_ProducesSameResultsAsSequential_MultiplePredicates()
+    {
+        // Arrange
+        using var collection = CreateLargeTestCollection(100_000);
+
+        // Act - Sequential
+        var sequentialResult = collection
+            .AsQueryable()
+            .AsSequential()
+            .Where(x => x.Age > 25 && x.Age < 50 && x.IsActive)
+            .Count();
+
+        // Act - Parallel
+        var parallelResult = collection
+            .AsQueryable()
+            .AsParallel()
+            .Where(x => x.Age > 25 && x.Age < 50 && x.IsActive)
+            .Count();
+
+        // Assert
+        Assert.Equal(sequentialResult, parallelResult);
+    }
+
+    [Fact]
+    public void ParallelExecution_ProducesSameResultsAsSequential_Sum()
+    {
+        // Arrange
+        using var collection = CreateLargeTestCollection(100_000);
+
+        // Act - Sequential
+        var sequentialResult = collection
+            .AsQueryable()
+            .AsSequential()
+            .Where(x => x.Age > 30 && x.IsActive)
+            .Sum(x => x.Salary);
+
+        // Act - Parallel
+        var parallelResult = collection
+            .AsQueryable()
+            .AsParallel()
+            .Where(x => x.Age > 30 && x.IsActive)
+            .Sum(x => x.Salary);
+
+        // Assert
+        Assert.Equal(sequentialResult, parallelResult);
+    }
+
+    [Fact]
+    public void ParallelExecution_WithCustomChunkSize_ProducesCorrectResults()
+    {
+        // Arrange
+        using var collection = CreateLargeTestCollection(100_000);
+
+        var customOptions = new ParallelQueryOptions
+        {
+            EnableParallelExecution = true,
+            ChunkSize = 4_096, // Smaller chunks
+            MaxDegreeOfParallelism = 2
+        };
+
+        // Act - Get baseline with sequential
+        var sequentialResult = collection
+            .AsQueryable()
+            .AsSequential()
+            .Where(x => x.Age > 40)
+            .Count();
+
+        // Act - With custom parallel options
+        var parallelResult = collection
+            .AsQueryable()
+            .WithParallelOptions(customOptions)
+            .Where(x => x.Age > 40)
+            .Count();
+
+        // Assert
+        Assert.Equal(sequentialResult, parallelResult);
+    }
+
+    [Fact]
+    public void ParallelExecution_ToList_ReturnsCorrectItems()
+    {
+        // Arrange
+        using var collection = CreateLargeTestCollection(50_000);
+
+        // Act - Sequential
+        var sequentialResult = collection
+            .AsQueryable()
+            .AsSequential()
+            .Where(x => x.Id < 100)
+            .ToList();
+
+        // Act - Parallel
+        var parallelResult = collection
+            .AsQueryable()
+            .AsParallel()
+            .Where(x => x.Id < 100)
+            .ToList();
+
+        // Assert
+        Assert.Equal(sequentialResult.Count, parallelResult.Count);
+        
+        // Both should contain the same IDs (order may differ due to parallel execution)
+        var sequentialIds = sequentialResult.Select(x => x.Id).OrderBy(x => x).ToList();
+        var parallelIds = parallelResult.Select(x => x.Id).OrderBy(x => x).ToList();
+        Assert.Equal(sequentialIds, parallelIds);
+    }
+
+    #endregion
 }

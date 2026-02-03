@@ -102,6 +102,12 @@ public sealed class ArrowQueryProvider : IQueryProvider
     /// </summary>
     public bool StrictMode { get; set; } = true;
 
+    /// <summary>
+    /// Gets or sets the options for parallel query execution.
+    /// Set to null to use default options, or customize for specific workloads.
+    /// </summary>
+    public ParallelQueryOptions? ParallelOptions { get; set; }
+
     internal ArrowQueryProvider(object source)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
@@ -207,10 +213,14 @@ public sealed class ArrowQueryProvider : IQueryProvider
         // Build selection bitmap using pooled bitfield (8x more memory efficient)
         using var selection = SelectionBitmap.Create(_count, initialValue: true);
 
-        // Apply column predicates
-        foreach (var predicate in plan.ColumnPredicates)
+        // Apply column predicates using parallel execution when beneficial
+        if (plan.ColumnPredicates.Count > 0)
         {
-            predicate.Evaluate(_recordBatch, ref System.Runtime.CompilerServices.Unsafe.AsRef(in selection));
+            ParallelQueryExecutor.EvaluatePredicatesParallel(
+                _recordBatch, 
+                ref System.Runtime.CompilerServices.Unsafe.AsRef(in selection),
+                plan.ColumnPredicates,
+                ParallelOptions);
         }
 
         // Count selected rows using hardware popcount
@@ -514,10 +524,14 @@ public sealed class ArrowQueryProvider : IQueryProvider
         // Build selection bitmap
         using var selection = SelectionBitmap.Create(_count, initialValue: true);
 
-        // Apply column predicates
-        foreach (var predicate in plan.ColumnPredicates)
+        // Apply column predicates using parallel execution when beneficial
+        if (plan.ColumnPredicates.Count > 0)
         {
-            predicate.Evaluate(_recordBatch, ref System.Runtime.CompilerServices.Unsafe.AsRef(in selection));
+            ParallelQueryExecutor.EvaluatePredicatesParallel(
+                _recordBatch,
+                ref System.Runtime.CompilerServices.Unsafe.AsRef(in selection),
+                plan.ColumnPredicates,
+                ParallelOptions);
         }
 
         // Parse the aggregate selector to extract aggregations

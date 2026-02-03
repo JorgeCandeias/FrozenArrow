@@ -44,12 +44,26 @@ public abstract class ColumnPredicate
     /// <param name="selection">The compact selection bitmap to update.</param>
     public virtual void Evaluate(RecordBatch batch, ref SelectionBitmap selection)
     {
-        // Default implementation: iterate and update bitmap
-        // Subclasses can override for better performance
-        var length = batch.Length;
         var column = batch.Column(ColumnIndex);
+        EvaluateRange(column, ref selection, 0, batch.Length);
+    }
 
-        for (int i = 0; i < length; i++)
+    /// <summary>
+    /// Evaluates this predicate for a range of rows. This method is used for parallel execution.
+    /// </summary>
+    /// <param name="column">The column to evaluate against.</param>
+    /// <param name="selection">The selection bitmap to update.</param>
+    /// <param name="startIndex">The first row index (inclusive).</param>
+    /// <param name="endIndex">The last row index (exclusive).</param>
+    /// <remarks>
+    /// This method is thread-safe for non-overlapping ranges, allowing multiple threads
+    /// to evaluate different row ranges concurrently on the same bitmap.
+    /// </remarks>
+    public virtual void EvaluateRange(IArrowArray column, ref SelectionBitmap selection, int startIndex, int endIndex)
+    {
+        // Default implementation: iterate and update bitmap
+        // Subclasses can override for better performance (e.g., SIMD)
+        for (int i = startIndex; i < endIndex; i++)
         {
             if (!selection[i]) continue; // Already filtered out
             
@@ -67,8 +81,8 @@ public abstract class ColumnPredicate
     /// </summary>
     protected virtual bool EvaluateSingle(IArrowArray column, int index)
     {
-        // Default: not implemented, subclasses should override Evaluate(ref SelectionBitmap) instead
-        throw new NotImplementedException("Subclass must override either EvaluateSingle or Evaluate(ref SelectionBitmap)");
+        // Default: not implemented, subclasses should override EvaluateRange instead
+        throw new NotImplementedException("Subclass must override either EvaluateSingle or EvaluateRange");
     }
 }
 
@@ -274,6 +288,90 @@ public sealed class Int32ComparisonPredicate : ColumnPredicate
         var columnValue = RunLengthEncodedArrayBuilder.GetInt32Value(column, index);
         return EvaluateScalar(columnValue);
     }
+
+    /// <summary>
+    /// Evaluates this predicate for a range of rows with SIMD optimization.
+    /// Thread-safe for non-overlapping ranges.
+    /// </summary>
+    public override void EvaluateRange(IArrowArray column, ref SelectionBitmap selection, int startIndex, int endIndex)
+    {
+        if (column is Int32Array int32Array)
+        {
+            EvaluateInt32RangeSimd(int32Array, ref selection, startIndex, endIndex);
+            return;
+        }
+
+        // Fallback to scalar path
+        base.EvaluateRange(column, ref selection, startIndex, endIndex);
+    }
+
+    private void EvaluateInt32RangeSimd(Int32Array array, ref SelectionBitmap selection, int startIndex, int endIndex)
+    {
+        var values = array.Values;
+        var nullBitmap = array.NullBitmapBuffer.Span;
+        var hasNulls = array.NullCount > 0;
+        int i = startIndex;
+
+        // SIMD path: process 8 elements at a time with AVX2
+        if (Vector256.IsHardwareAccelerated && (endIndex - startIndex) >= 8)
+        {
+            var compareValue = Vector256.Create(Value);
+            ref int valuesRef = ref Unsafe.AsRef(in values[0]);
+            
+            // Align to 8-element boundary from startIndex
+            int vectorStart = ((startIndex + 7) >> 3) << 3; // Round up to next 8
+            int vectorEnd = (endIndex >> 3) << 3; // Round down to 8
+
+            // Scalar head (before aligned start)
+            for (; i < vectorStart && i < endIndex; i++)
+            {
+                if (!selection[i]) continue;
+                if (hasNulls && IsNull(nullBitmap, i))
+                {
+                    selection.Clear(i);
+                    continue;
+                }
+                if (!EvaluateScalar(values[i]))
+                {
+                    selection.Clear(i);
+                }
+            }
+
+            // SIMD middle
+            for (; i < vectorEnd; i += 8)
+            {
+                var data = Vector256.LoadUnsafe(ref Unsafe.Add(ref valuesRef, i));
+                
+                Vector256<int> mask = Operator switch
+                {
+                    ComparisonOperator.Equal => Vector256.Equals(data, compareValue),
+                    ComparisonOperator.NotEqual => ~Vector256.Equals(data, compareValue),
+                    ComparisonOperator.LessThan => Vector256.LessThan(data, compareValue),
+                    ComparisonOperator.LessThanOrEqual => Vector256.LessThanOrEqual(data, compareValue),
+                    ComparisonOperator.GreaterThan => Vector256.GreaterThan(data, compareValue),
+                    ComparisonOperator.GreaterThanOrEqual => Vector256.GreaterThanOrEqual(data, compareValue),
+                    _ => Vector256<int>.Zero
+                };
+
+                ApplyMaskToBitmap(mask, ref selection, i, hasNulls, nullBitmap);
+            }
+        }
+
+        // Scalar tail
+        for (; i < endIndex; i++)
+        {
+            if (!selection[i]) continue;
+            if (hasNulls && IsNull(nullBitmap, i))
+            {
+                selection.Clear(i);
+                continue;
+            }
+            if (!EvaluateScalar(values[i]))
+            {
+                selection.Clear(i);
+            }
+        }
+    }
 }
 
 /// <summary>
@@ -461,6 +559,90 @@ public sealed class DoubleComparisonPredicate : ColumnPredicate
         if (column.IsNull(index)) return false;
         var columnValue = RunLengthEncodedArrayBuilder.GetDoubleValue(column, index);
         return EvaluateScalar(columnValue);
+    }
+
+    /// <summary>
+    /// Evaluates this predicate for a range of rows with SIMD optimization.
+    /// Thread-safe for non-overlapping ranges.
+    /// </summary>
+    public override void EvaluateRange(IArrowArray column, ref SelectionBitmap selection, int startIndex, int endIndex)
+    {
+        if (column is DoubleArray doubleArray)
+        {
+            EvaluateDoubleRangeSimd(doubleArray, ref selection, startIndex, endIndex);
+            return;
+        }
+
+        // Fallback to scalar path
+        base.EvaluateRange(column, ref selection, startIndex, endIndex);
+    }
+
+    private void EvaluateDoubleRangeSimd(DoubleArray array, ref SelectionBitmap selection, int startIndex, int endIndex)
+    {
+        var values = array.Values;
+        var nullBitmap = array.NullBitmapBuffer.Span;
+        var hasNulls = array.NullCount > 0;
+        int i = startIndex;
+
+        // SIMD path: process 4 elements at a time with AVX2 (256-bit = 4 doubles)
+        if (Vector256.IsHardwareAccelerated && (endIndex - startIndex) >= 4)
+        {
+            var compareValue = Vector256.Create(Value);
+            ref double valuesRef = ref Unsafe.AsRef(in values[0]);
+            
+            // Align to 4-element boundary from startIndex
+            int vectorStart = ((startIndex + 3) >> 2) << 2; // Round up to next 4
+            int vectorEnd = (endIndex >> 2) << 2; // Round down to 4
+
+            // Scalar head (before aligned start)
+            for (; i < vectorStart && i < endIndex; i++)
+            {
+                if (!selection[i]) continue;
+                if (hasNulls && IsNull(nullBitmap, i))
+                {
+                    selection.Clear(i);
+                    continue;
+                }
+                if (!EvaluateScalar(values[i]))
+                {
+                    selection.Clear(i);
+                }
+            }
+
+            // SIMD middle
+            for (; i < vectorEnd; i += 4)
+            {
+                var data = Vector256.LoadUnsafe(ref Unsafe.Add(ref valuesRef, i));
+                
+                Vector256<double> mask = Operator switch
+                {
+                    ComparisonOperator.Equal => Vector256.Equals(data, compareValue),
+                    ComparisonOperator.NotEqual => ~Vector256.Equals(data, compareValue),
+                    ComparisonOperator.LessThan => Vector256.LessThan(data, compareValue),
+                    ComparisonOperator.LessThanOrEqual => Vector256.LessThanOrEqual(data, compareValue),
+                    ComparisonOperator.GreaterThan => Vector256.GreaterThan(data, compareValue),
+                    ComparisonOperator.GreaterThanOrEqual => Vector256.GreaterThanOrEqual(data, compareValue),
+                    _ => Vector256<double>.Zero
+                };
+
+                ApplyDoubleMaskToBitmap(mask, ref selection, i, hasNulls, nullBitmap);
+            }
+        }
+
+        // Scalar tail
+        for (; i < endIndex; i++)
+        {
+            if (!selection[i]) continue;
+            if (hasNulls && IsNull(nullBitmap, i))
+            {
+                selection.Clear(i);
+                continue;
+            }
+            if (!EvaluateScalar(values[i]))
+            {
+                selection.Clear(i);
+            }
+        }
     }
 }
 
