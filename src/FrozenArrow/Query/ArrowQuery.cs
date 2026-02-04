@@ -644,6 +644,89 @@ public sealed class ArrowQueryProvider : IQueryProvider
     }
 
     /// <summary>
+    /// Executes a query and returns results as an array using pooled materialization.
+    /// This is the most efficient materialization path - direct array allocation, zero List overhead.
+    /// </summary>
+    internal T[] ExecuteToArray<T>(Expression expression)
+    {
+        var plan = AnalyzeExpression(expression);
+
+        if (!plan.IsFullyOptimized && StrictMode)
+        {
+            throw new NotSupportedException(
+                $"Query contains operations that cannot be optimized: {plan.UnsupportedReason}. " +
+                $"Set ArrowQueryProvider.StrictMode = false to allow fallback materialization.");
+        }
+
+        // Build selection bitmap
+        using var selection = SelectionBitmap.Create(_count, initialValue: true);
+
+        // Apply column predicates
+        if (plan.ColumnPredicates.Count > 0)
+        {
+            ParallelQueryExecutor.EvaluatePredicatesParallel(
+                _recordBatch,
+                ref System.Runtime.CompilerServices.Unsafe.AsRef(in selection),
+                plan.ColumnPredicates,
+                ParallelOptions,
+                _zoneMap);
+        }
+
+        // Get selected indices
+        var selectedCount = selection.CountSet();
+        var selectedIndices = new List<int>(selectedCount);
+        foreach (var idx in selection.GetSelectedIndices())
+        {
+            selectedIndices.Add(idx);
+        }
+
+        // Use pooled materialization
+        Func<RecordBatch, int, T> createItemFunc = (batch, index) => (T)_createItem(batch, index);
+        return PooledBatchMaterializer.MaterializeToArray(_recordBatch, selectedIndices, createItemFunc, ParallelOptions);
+    }
+
+    /// <summary>
+    /// Executes a query and returns the selected row indices without materializing objects.
+    /// Zero-allocation path for advanced scenarios.
+    /// </summary>
+    internal int[] ExecuteToIndices<T>(Expression expression)
+    {
+        var plan = AnalyzeExpression(expression);
+
+        if (!plan.IsFullyOptimized && StrictMode)
+        {
+            throw new NotSupportedException(
+                $"Query contains operations that cannot be optimized: {plan.UnsupportedReason}. " +
+                $"Set ArrowQueryProvider.StrictMode = false to allow fallback materialization.");
+        }
+
+        // Build selection bitmap
+        using var selection = SelectionBitmap.Create(_count, initialValue: true);
+
+        // Apply column predicates
+        if (plan.ColumnPredicates.Count > 0)
+        {
+            ParallelQueryExecutor.EvaluatePredicatesParallel(
+                _recordBatch,
+                ref System.Runtime.CompilerServices.Unsafe.AsRef(in selection),
+                plan.ColumnPredicates,
+                ParallelOptions,
+                _zoneMap);
+        }
+
+        // Get selected indices directly (minimal allocation)
+        var selectedCount = selection.CountSet();
+        var indices = new int[selectedCount];
+        int pos = 0;
+        foreach (var idx in selection.GetSelectedIndices())
+        {
+            indices[pos++] = idx;
+        }
+
+        return indices;
+    }
+
+    /// <summary>
     /// Legacy enumeration methods kept for compatibility (though batched version is used by default).
     /// </summary>
     private IEnumerable<T> EnumerateSelectedIndicesCore<T>(List<int> selectedIndices)

@@ -167,6 +167,7 @@ public static class Program
               bitmap            SelectionBitmap operations
               predicate         Predicate evaluation (SIMD vs scalar)
               enumeration       Result materialization
+              pooled            Pooled materialization (ArrayPool, zero-alloc)
               shortcircuit      Any/First with early-exit optimization
               querycache        Query plan caching performance
               all               Run all scenarios
@@ -198,6 +199,7 @@ public static class Program
             "bitmap" => [new BitmapOperationsScenario()],
             "predicate" => [new PredicateEvaluationScenario()],
             "enumeration" => [new EnumerationScenario()],
+            "pooled" => [new PooledMaterializationScenario()],
             "shortcircuit" => [new ShortCircuitScenario()],
             "querycache" => [new QueryPlanCacheScenario()],
             _ => throw new ArgumentException($"Unknown scenario: {scenario}")
@@ -244,6 +246,7 @@ public static class Program
         new BitmapOperationsScenario(),
         new PredicateEvaluationScenario(),
         new EnumerationScenario(),
+        new PooledMaterializationScenario(),
         new ShortCircuitScenario(),
         new QueryPlanCacheScenario()
     ];
