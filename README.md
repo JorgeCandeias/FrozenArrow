@@ -6,6 +6,12 @@
 
 FrozenArrow is a .NET library that implements a frozen generic collection with columnar compression using Apache Arrow. It's designed for scenarios where you need significant in-memory compression savings for massive datasets, while accepting the performance trade-off of reconstructing items on-the-fly during enumeration.
 
+## WIP Notice
+
+This project is currently a work-in-progress and not yet production-ready.
+The API and features are subject to change.
+Do not use this library in production systems at this time.
+
 ## Features
 
 
