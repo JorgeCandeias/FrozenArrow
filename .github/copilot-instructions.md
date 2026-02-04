@@ -243,6 +243,7 @@ Include performance numbers in:
 ? **Baseline saved** for future comparisons  
 ? **Profiling README updated** if new scenario added or significant results changed
 
+
 ### Red Flags ??
 
 **Stop and investigate if:**
@@ -250,6 +251,31 @@ Include performance numbers in:
 - ? Multiple unrelated scenarios regress >10%
 - ? Memory allocation increases >50% without clear justification
 - ? Any scenario becomes >2x slower
+
+### Dealing with Unstable Results ??
+
+The profiler automatically detects and handles measurement instability:
+
+1. **Outlier Removal**: Samples affected by GC or OS interruptions are automatically removed using IQR method. Output shows "X outlier(s) removed" when this occurs.
+
+2. **Stability Warnings**: Results marked with ?? have high variance (CV > 15%) and may be unreliable.
+
+**If you see unstable results:**
+```bash
+# For allocation-heavy scenarios (GroupBy, Enumeration), use GC between iterations:
+dotnet run -c Release -- -s groupby -r 1000000 -i 10 --gc-between-iterations
+
+# Increase iterations and warmup for more stable median:
+dotnet run -c Release -- -s all -r 1000000 -i 15 -w 5
+
+# To see raw data without outlier removal:
+dotnet run -c Release -- -s all -r 1000000 -i 20 --no-outlier-removal
+```
+
+**Don't trust results that:**
+- Show ?? stability warning
+- Have max/min ratio > 2x
+- Required many outliers to be removed (>30% of samples)
 
 ---
 
