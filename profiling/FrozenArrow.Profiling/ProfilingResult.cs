@@ -106,6 +106,63 @@ public sealed class ProfilingResult
     /// Timestamp when the profiling was run.
     /// </summary>
     public DateTime Timestamp { get; init; } = DateTime.UtcNow;
+    
+    /// <summary>
+    /// Number of outliers removed from the samples.
+    /// </summary>
+    public int OutliersRemoved { get; init; }
+    
+    /// <summary>
+    /// Coefficient of Variation (StdDev / Mean).
+    /// Lower values indicate more stable measurements.
+    /// </summary>
+    [JsonIgnore]
+    public double CoefficientOfVariation => AverageMicroseconds > 0 
+        ? StdDevMicroseconds / AverageMicroseconds 
+        : 0;
+    
+    /// <summary>
+    /// Whether the measurements are considered stable (CV below threshold).
+    /// </summary>
+    public bool IsStable { get; init; } = true;
+    
+    /// <summary>
+    /// Warning message if measurements are unstable.
+    /// </summary>
+    public string? StabilityWarning { get; init; }
+    
+    /// <summary>
+    /// Trimmed mean (average after removing outliers).
+    /// More robust than regular mean.
+    /// </summary>
+    [JsonIgnore]
+    public double TrimmedMeanMicroseconds
+    {
+        get
+        {
+            if (SamplesMicroseconds.Length < 4) return AverageMicroseconds;
+            var sorted = SamplesMicroseconds.OrderBy(x => x).ToArray();
+            // Remove top and bottom 10%
+            var trimCount = Math.Max(1, sorted.Length / 10);
+            return sorted.Skip(trimCount).Take(sorted.Length - 2 * trimCount).Average();
+        }
+    }
+    
+    /// <summary>
+    /// Interquartile range (Q3 - Q1) - measure of statistical dispersion.
+    /// </summary>
+    [JsonIgnore]
+    public double InterquartileRange
+    {
+        get
+        {
+            if (SamplesMicroseconds.Length < 4) return 0;
+            var sorted = SamplesMicroseconds.OrderBy(x => x).ToArray();
+            var q1Index = sorted.Length / 4;
+            var q3Index = 3 * sorted.Length / 4;
+            return sorted[q3Index] - sorted[q1Index];
+        }
+    }
 }
 
 /// <summary>

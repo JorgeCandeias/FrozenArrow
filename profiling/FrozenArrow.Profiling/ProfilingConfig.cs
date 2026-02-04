@@ -59,6 +59,45 @@ public sealed class ProfilingConfig
     /// List scenarios and exit.
     /// </summary>
     public bool ListScenarios { get; set; }
+    
+    /// <summary>
+    /// Enable outlier removal using IQR method.
+    /// Default: true - removes extreme outliers caused by GC/OS interruptions.
+    /// </summary>
+    public bool RemoveOutliers { get; set; } = true;
+    
+    /// <summary>
+    /// Outlier removal factor (multiplier for IQR).
+    /// Default: 1.5 (standard IQR method for mild outliers).
+    /// Use 3.0 for extreme outliers only.
+    /// </summary>
+    public double OutlierIqrFactor { get; set; } = 1.5;
+    
+    /// <summary>
+    /// Force GC between each measured iteration to reduce variance.
+    /// Default: false (adds overhead but reduces variance).
+    /// </summary>
+    public bool GcBetweenIterations { get; set; } = false;
+    
+    /// <summary>
+    /// Elevate process priority during measurement.
+    /// Default: true - reduces interference from other processes.
+    /// Requires appropriate permissions on some systems.
+    /// </summary>
+    public bool ElevateProcessPriority { get; set; } = true;
+    
+    /// <summary>
+    /// Coefficient of Variation threshold for stability warning.
+    /// If CV exceeds this, results are flagged as unstable.
+    /// Default: 0.15 (15% - higher values tolerate more variance).
+    /// </summary>
+    public double StabilityThreshold { get; set; } = 0.15;
+    
+    /// <summary>
+    /// Minimum number of valid samples required after outlier removal.
+    /// Default: 3 - if fewer samples remain, results are flagged.
+    /// </summary>
+    public int MinValidSamples { get; set; } = 3;
 }
 
 /// <summary>

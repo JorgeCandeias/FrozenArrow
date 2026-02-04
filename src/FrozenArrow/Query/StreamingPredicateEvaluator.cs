@@ -20,6 +20,9 @@ namespace FrozenArrow.Query;
 /// 
 /// Zone maps are used to skip entire chunks that cannot contain matches,
 /// providing O(1) skip instead of O(chunk_size) evaluation.
+/// 
+/// Predicates are automatically reordered by estimated selectivity for optimal
+/// short-circuit behavior (most selective predicates are evaluated first).
 /// </remarks>
 internal static class StreamingPredicateEvaluator
 {
@@ -42,6 +45,10 @@ internal static class StreamingPredicateEvaluator
             return batch.Length > 0 ? 0 : -1;
 
         var rowCount = batch.Length;
+        
+        // Reorder predicates by estimated selectivity (most selective first).
+        // For short-circuit evaluation, this maximizes the chance of early rejection.
+        predicates = PredicateReorderer.ReorderBySelectivity(predicates, zoneMap, rowCount);
         
         // Pre-fetch columns for all predicates
         var columns = new IArrowArray[predicates.Count];
@@ -165,7 +172,11 @@ internal static class StreamingPredicateEvaluator
 
         var rowCount = batch.Length;
         
-        // Pre-fetch columns
+        // Reorder predicates by estimated selectivity (most selective first).
+        // For short-circuit evaluation, this maximizes the chance of early rejection.
+        predicates = PredicateReorderer.ReorderBySelectivity(predicates, zoneMap, rowCount);
+        
+        // Pre-fetch columns (order matches reordered predicates)
         var columns = new IArrowArray[predicates.Count];
         for (int i = 0; i < predicates.Count; i++)
         {

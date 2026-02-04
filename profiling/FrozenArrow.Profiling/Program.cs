@@ -82,6 +82,19 @@ public static class Program
                 case "--no-parallel":
                     config.EnableParallel = false;
                     break;
+                case "--no-outlier-removal":
+                    config.RemoveOutliers = false;
+                    break;
+                case "--gc-between-iterations":
+                    config.GcBetweenIterations = true;
+                    break;
+                case "--no-priority-boost":
+                    config.ElevateProcessPriority = false;
+                    break;
+                case "--stability-threshold":
+                    if (i + 1 < args.Length && double.TryParse(args[++i], out var thresh)) 
+                        config.StabilityThreshold = thresh;
+                    break;
             }
         }
 
@@ -97,7 +110,11 @@ public static class Program
             CompareBaseline = config.CompareBaseline,
             Scenario = scenario,
             ShowHelp = showHelp,
-            ListScenarios = listScenarios
+            ListScenarios = listScenarios,
+            RemoveOutliers = config.RemoveOutliers,
+            GcBetweenIterations = config.GcBetweenIterations,
+            ElevateProcessPriority = config.ElevateProcessPriority,
+            StabilityThreshold = config.StabilityThreshold
         };
     }
 
@@ -122,10 +139,16 @@ public static class Program
               -l, --list                List available scenarios
               -h, --help                Show this help
             
+            Stability Options:
+              --no-outlier-removal      Disable IQR-based outlier removal
+              --gc-between-iterations   Force GC between each iteration (slower but more stable)
+              --no-priority-boost       Don't elevate process priority
+              --stability-threshold <v> CV threshold for stability warning (default: 0.15)
+            
             Examples:
               dotnet run -- -s filter -r 1000000 -i 10
               dotnet run -- -s all -o json --save results.json
-              dotnet run -- -s aggregate -v
+              dotnet run -- -s aggregate -v --gc-between-iterations
             """);
     }
 

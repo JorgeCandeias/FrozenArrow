@@ -51,6 +51,41 @@ dotnet run -c Release -- -s all -r 1000000 -c baseline.json
 | `--list` | `-l` | List scenarios and exit | |
 | `--help` | `-h` | Show help | |
 
+### Stability Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--no-outlier-removal` | Disable IQR-based outlier removal | Enabled |
+| `--gc-between-iterations` | Force GC between each iteration (slower but more stable) | Disabled |
+| `--no-priority-boost` | Don't elevate process priority during measurement | Enabled |
+| `--stability-threshold` | CV threshold for stability warning (0.0-1.0) | `0.15` |
+
+## Measurement Stability Features
+
+The profiler includes several features to reduce variance and improve reliability:
+
+### 1. Outlier Removal (IQR Method)
+Measurements affected by GC or OS interruptions are automatically detected and removed using the Interquartile Range method. Results show "X outlier(s) removed" when this occurs.
+
+### 2. Stability Detection
+Results are flagged with ? if the Coefficient of Variation exceeds the threshold (default 15%), indicating unreliable measurements.
+
+### 3. Process Priority Elevation
+The profiler automatically elevates process and thread priority during measurements to reduce interference from other processes.
+
+### 4. GC Control
+- Full GC is forced before warmup and before measurement
+- Optional `--gc-between-iterations` for scenarios with high allocation variance
+
+### Tips for Stable Measurements
+
+1. **Use sufficient iterations**: `-i 10` or higher for stable median
+2. **Use sufficient warmup**: `-w 3` or higher for JIT compilation
+3. **Close other applications**: Especially resource-intensive ones
+4. **Use GC between iterations**: `--gc-between-iterations` for allocation-heavy scenarios
+5. **Run multiple times**: If results vary significantly, something is interfering
+6. **Check stability warnings**: ? indicators mean results may not be reliable
+
 ## Available Scenarios
 
 | Scenario | Description |
@@ -73,23 +108,23 @@ dotnet run -c Release -- -s all -r 1000000 -c baseline.json
 
 > **Environment**: Windows 11, .NET 10.0, 24-core CPU, AVX2 enabled, AVX-512 disabled  
 > **Dataset**: 1,000,000 rows, 8 columns (int, double, bool, long)  
-> **Configuration**: Release build, 10 iterations, 2 warmup  
-> **Last Updated**: 2025-01-27 (after null bitmap batch + dense block SIMD + short-circuit optimizations)
+> **Configuration**: Release build, 10 iterations, 3 warmup  
+> **Last Updated**: 2025-01-27 (after predicate reordering optimization)
 
 ### Summary Table
 
 | Scenario | Median (µs) | M rows/s | Allocated |
 |----------|-------------|----------|-----------|
-| **BitmapOperations** | 566 | 1,765 | 24 B |
-| **Aggregate** | 3,157 | 317 | 77 KB |
-| **SparseAggregation** | 28,425 | 35 | 396 KB |
-| **PredicateEvaluation** | 9,834 | 102 | 45 KB |
-| **FusedExecution** | 10,066 | 99 | 58 KB |
-| **Filter** | 8,374 | 119 | 39 KB |
-| **GroupBy** | 25,577 | 39 | 63 KB |
-| **ParallelComparison** | 24,549 | 41 | 56 KB |
-| **ShortCircuit** | 28,644 | 35 | 125 KB |
-| **Enumeration** | 106,424 | 9 | 116 MB |
+| **BitmapOperations** | 518 | 1,933 | 24 B |
+| **Aggregate** | 3,182 | 314 | 39 KB |
+| **SparseAggregation** | 28,102 | 36 | 199 KB |
+| **PredicateEvaluation** | 11,228 | 89 | 45 KB |
+| **FusedExecution** | 9,950 | 101 | 58 KB |
+| **Filter** | 8,082 | 124 | 40 KB |
+| **GroupBy** | 23,520 | 43 | 64 KB |
+| **ParallelComparison** | 25,357 | 39 | 56 KB |
+| **ShortCircuit** | 28,219 | 35 | 127 KB |
+| **Enumeration** | 110,645 | 9 | 116 MB |
 
 ### Key Findings
 

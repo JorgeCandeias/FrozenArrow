@@ -49,6 +49,7 @@ internal static class ParallelQueryExecutor
     /// Evaluates multiple predicates against a record batch in parallel.
     /// Each chunk of rows is processed by all predicates before moving to the next chunk.
     /// Zone maps are used to skip entire chunks when possible.
+    /// Predicates are automatically reordered by estimated selectivity for optimal performance.
     /// </summary>
     /// <param name="batch">The Arrow record batch to evaluate.</param>
     /// <param name="selection">The selection bitmap to update.</param>
@@ -73,6 +74,10 @@ internal static class ParallelQueryExecutor
             EvaluatePredicatesSequential(batch, ref selection, predicates, zoneMap);
             return;
         }
+
+        // Reorder predicates by estimated selectivity (most selective first).
+        // This reduces the number of rows that subsequent predicates need to evaluate.
+        predicates = PredicateReorderer.ReorderBySelectivity(predicates, zoneMap, rowCount);
 
         var chunkSize = options.ChunkSize;
         var chunkCount = (rowCount + chunkSize - 1) / chunkSize;
@@ -160,6 +165,7 @@ internal static class ParallelQueryExecutor
 
     /// <summary>
     /// Evaluates predicates sequentially (original behavior).
+    /// Also applies predicate reordering for optimal evaluation order.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void EvaluatePredicatesSequential(
@@ -168,6 +174,9 @@ internal static class ParallelQueryExecutor
         IReadOnlyList<ColumnPredicate> predicates,
         ZoneMap? zoneMap = null)
     {
+        // Reorder predicates by estimated selectivity (most selective first)
+        predicates = PredicateReorderer.ReorderBySelectivity(predicates, zoneMap, batch.Length);
+        
         foreach (var predicate in predicates)
         {
             predicate.Evaluate(batch, ref selection);

@@ -55,6 +55,7 @@ internal static class FusedAggregator
         return true;
     }
 
+
     /// <summary>
     /// Executes a fused filter+aggregate operation in a single pass.
     /// </summary>
@@ -72,6 +73,10 @@ internal static class FusedAggregator
         ParallelQueryOptions? options = null,
         ZoneMap? zoneMap = null)
     {
+        // Reorder predicates by estimated selectivity (most selective first).
+        // This reduces the number of rows that subsequent predicates need to evaluate.
+        predicates = PredicateReorderer.ReorderBySelectivity(predicates, zoneMap, batch.Length);
+
         // Get the aggregate column
         var aggregateColumnIndex = aggregate.ColumnName is not null && columnIndexMap.TryGetValue(aggregate.ColumnName, out var idx)
             ? idx
@@ -79,7 +84,7 @@ internal static class FusedAggregator
 
         var aggregateColumn = aggregateColumnIndex >= 0 ? batch.Column(aggregateColumnIndex) : null;
 
-        // Pre-fetch predicate columns
+        // Pre-fetch predicate columns (order matches reordered predicates)
         var predicateColumns = new IArrowArray[predicates.Count];
         for (int i = 0; i < predicates.Count; i++)
         {
