@@ -269,7 +269,7 @@ public sealed class ArrowQueryProvider : IQueryProvider
             return ExecuteSimpleAggregate<TResult>(plan.SimpleAggregate, ref System.Runtime.CompilerServices.Unsafe.AsRef(in selection));
         }
 
-        // IEnumerable<T> - return lazy enumeration
+        // IEnumerable<T> - return lazy enumeration using batched enumerator for better performance
         if (resultType.IsGenericType && 
             (resultType.GetGenericTypeDefinition() == typeof(IEnumerable<>) ||
              resultType.GetGenericTypeDefinition() == typeof(IQueryable<>)))
@@ -280,7 +280,7 @@ public sealed class ArrowQueryProvider : IQueryProvider
             {
                 selectedIndices.Add(idx);
             }
-            var enumerable = EnumerateSelectedIndices(selectedIndices);
+            var enumerable = CreateBatchedEnumerable(selectedIndices);
             return (TResult)enumerable;
         }
 
@@ -572,6 +572,26 @@ public sealed class ArrowQueryProvider : IQueryProvider
         return list;
     }
 
+    /// <summary>
+    /// Creates a batched enumerable for lazy enumeration with improved cache locality.
+    /// </summary>
+    private object CreateBatchedEnumerable(List<int> selectedIndices)
+    {
+        var method = typeof(ArrowQueryProvider)
+            .GetMethod(nameof(CreateBatchedEnumerableTyped), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .MakeGenericMethod(_elementType);
+        return method.Invoke(this, [selectedIndices])!;
+    }
+
+    private IEnumerable<T> CreateBatchedEnumerableTyped<T>(List<int> selectedIndices)
+    {
+        Func<RecordBatch, int, T> createItemFunc = (batch, index) => (T)_createItem(batch, index);
+        return new MaterializedResultCollection<T>(_recordBatch, selectedIndices, createItemFunc, ParallelOptions);
+    }
+
+    /// <summary>
+    /// Legacy enumeration methods kept for compatibility (though batched version is used by default).
+    /// </summary>
     private IEnumerable<T> EnumerateSelectedIndicesCore<T>(List<int> selectedIndices)
     {
         foreach (var i in selectedIndices)
