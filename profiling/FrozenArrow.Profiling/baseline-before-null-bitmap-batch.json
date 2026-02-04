@@ -1,0 +1,43 @@
+[
+  {
+    "ScenarioName": "Filter",
+    "Description": "Filter \u002B Count with varying selectivity",
+    "RowCount": 1000000,
+    "Iterations": 15,
+    "SamplesMicroseconds": [
+      29492.3,
+      31338,
+      33832,
+      28466.6,
+      29769.4,
+      30792.6,
+      30071.5,
+      32496.2,
+      29365.2,
+      37324.1,
+      27820.6,
+      21427.1,
+      19926.9,
+      22531.8,
+      19467.1
+    ],
+    "MinMicroseconds": 19467.1,
+    "MaxMicroseconds": 37324.1,
+    "MedianMicroseconds": 29492.3,
+    "AverageMicroseconds": 28274.759999999995,
+    "StdDevMicroseconds": 5222.392805957274,
+    "RowsPerSecond": 33907155.42700976,
+    "MillionRowsPerSecond": 33.90715542700976,
+    "PhaseDetails": null,
+    "AllocatedBytes": 39802,
+    "Metadata": {
+      "HighSelectivity": "Age \u003E 55 -\u003E 199452 rows",
+      "LowSelectivity": "IsActive -\u003E 699215 rows",
+      "MultiFilter": "Age \u003E 30 \u0026\u0026 IsActive \u0026\u0026 Salary \u003E 50000 -\u003E 466007 rows"
+    },
+    "Timestamp": "2026-02-04T14:42:51.9222864Z",
+    "OutliersRemoved": 0,
+    "IsStable": false,
+    "StabilityWarning": "High variance detected (CV=18.5%, max/min=1.9x). Consider: more warmup, closing other apps, or using --gc-between-iterations."
+  }
+]

@@ -224,6 +224,13 @@ public sealed class Int32ComparisonPredicate : ColumnPredicate
         var nullBitmap = array.NullBitmapBuffer.Span;
         var hasNulls = array.NullCount > 0;
 
+        // OPTIMIZATION: Filter out nulls in bulk BEFORE predicate evaluation
+        // This eliminates per-element null checks in the hot loops below
+        if (hasNulls && !nullBitmap.IsEmpty)
+        {
+            selection.AndWithArrowNullBitmap(nullBitmap);
+        }
+
         // SIMD path: process 8 elements at a time with AVX2
         if (Vector256.IsHardwareAccelerated && length >= 8)
         {
@@ -249,21 +256,14 @@ public sealed class Int32ComparisonPredicate : ColumnPredicate
                     _ => Vector256<int>.Zero
                 };
 
-                // Extract comparison results and apply to bitmap
-                // Each comparison produces 0xFFFFFFFF for true, 0x00000000 for false
-                // We need to convert this to individual bits for the bitmap
-                ApplyMaskToBitmap(mask, ref selection, i, hasNulls, nullBitmap);
+                // Apply mask to bitmap (nulls already filtered out)
+                ApplyMaskToBitmap(mask, ref selection, i);
             }
 
-            // Scalar tail
+            // Scalar tail (nulls already filtered out)
             for (; i < length; i++)
             {
                 if (!selection[i]) continue;
-                if (hasNulls && IsNull(nullBitmap, i))
-                {
-                    selection.Clear(i);
-                    continue;
-                }
                 if (!EvaluateScalar(values[i]))
                 {
                     selection.Clear(i);
@@ -272,15 +272,10 @@ public sealed class Int32ComparisonPredicate : ColumnPredicate
         }
         else
         {
-            // Scalar fallback for non-AVX2 systems
+            // Scalar fallback for non-AVX2 systems (nulls already filtered out)
             for (int i = 0; i < length; i++)
             {
                 if (!selection[i]) continue;
-                if (hasNulls && IsNull(nullBitmap, i))
-                {
-                    selection.Clear(i);
-                    continue;
-                }
                 if (!EvaluateScalar(values[i]))
                 {
                     selection.Clear(i);
@@ -290,7 +285,7 @@ public sealed class Int32ComparisonPredicate : ColumnPredicate
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ApplyMaskToBitmap(Vector256<int> mask, ref SelectionBitmap selection, int startIndex, bool hasNulls, ReadOnlySpan<byte> nullBitmap)
+    private void ApplyMaskToBitmap(Vector256<int> mask, ref SelectionBitmap selection, int startIndex)
     {
         // Use MoveMask to convert SIMD mask to 8-bit mask in a single instruction
         // MoveMask extracts the high bit of each 32-bit element (8 elements -> 8 bits)
@@ -301,19 +296,53 @@ public sealed class Int32ComparisonPredicate : ColumnPredicate
             var floatMask = mask.AsSingle();
             var byteMask = (byte)Avx.MoveMask(floatMask);
             
+            // Apply the mask - this ANDs with existing selection automatically
+            // Nulls were already filtered out in bulk, so no need to check here
+            selection.AndMask8(startIndex, byteMask);
+        }
+        else
+        {
+            // Scalar fallback
+            ApplyMaskToBitmapScalar(mask, ref selection, startIndex);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ApplyMaskToBitmapWithNullCheck(Vector256<int> mask, ref SelectionBitmap selection, int startIndex, bool hasNulls, ReadOnlySpan<byte> nullBitmap)
+    {
+        // Version used by EvaluateRange where bulk null filtering wasn't applied
+        if (Avx2.IsSupported)
+        {
+            var floatMask = mask.AsSingle();
+            var byteMask = (byte)Avx.MoveMask(floatMask);
+            
             // Handle nulls by clearing those bits from the mask
             if (hasNulls)
             {
                 byteMask = ApplyNullMaskVectorized(byteMask, nullBitmap, startIndex);
             }
             
-            // Apply the mask - this ANDs with existing selection automatically
             selection.AndMask8(startIndex, byteMask);
         }
         else
         {
-            // Scalar fallback
-            ApplyMaskToBitmapScalar(mask, ref selection, startIndex, hasNulls, nullBitmap);
+            // Scalar fallback with null check
+            for (int j = 0; j < 8; j++)
+            {
+                var idx = startIndex + j;
+                if (!selection[idx]) continue;
+                
+                if (hasNulls && IsNull(nullBitmap, idx))
+                {
+                    selection.Clear(idx);
+                    continue;
+                }
+                
+                if (mask.GetElement(j) == 0)
+                {
+                    selection.Clear(idx);
+                }
+            }
         }
     }
 
@@ -345,19 +374,14 @@ public sealed class Int32ComparisonPredicate : ColumnPredicate
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ApplyMaskToBitmapScalar(Vector256<int> mask, ref SelectionBitmap selection, int startIndex, bool hasNulls, ReadOnlySpan<byte> nullBitmap)
+    private void ApplyMaskToBitmapScalar(Vector256<int> mask, ref SelectionBitmap selection, int startIndex)
     {
         // Scalar fallback for non-AVX2 systems
+        // Nulls were already filtered out in bulk, so no need to check here
         for (int j = 0; j < 8; j++)
         {
             var idx = startIndex + j;
             if (!selection[idx]) continue;
-            
-            if (hasNulls && IsNull(nullBitmap, idx))
-            {
-                selection.Clear(idx);
-                continue;
-            }
             
             if (mask.GetElement(j) == 0)
             {
@@ -486,7 +510,9 @@ public sealed class Int32ComparisonPredicate : ColumnPredicate
                     _ => Vector256<int>.Zero
                 };
 
-                ApplyMaskToBitmap(mask, ref selection, i, hasNulls, nullBitmap);
+                // For range evaluation, we still need per-element null checks
+                // since bulk filtering wasn't applied (parallel execution path)
+                ApplyMaskToBitmapWithNullCheck(mask, ref selection, i, hasNulls, nullBitmap);
             }
         }
 
@@ -579,6 +605,13 @@ public sealed class DoubleComparisonPredicate : ColumnPredicate
         var nullBitmap = array.NullBitmapBuffer.Span;
         var hasNulls = array.NullCount > 0;
 
+        // OPTIMIZATION: Filter out nulls in bulk BEFORE predicate evaluation
+        // This eliminates per-element null checks in the hot loops below
+        if (hasNulls && !nullBitmap.IsEmpty)
+        {
+            selection.AndWithArrowNullBitmap(nullBitmap);
+        }
+
         // SIMD path: process 4 elements at a time with AVX2 (256-bit = 4 doubles)
         if (Vector256.IsHardwareAccelerated && length >= 4)
         {
@@ -604,19 +637,14 @@ public sealed class DoubleComparisonPredicate : ColumnPredicate
                     _ => Vector256<double>.Zero
                 };
 
-                // Extract comparison results and apply to bitmap
-                ApplyDoubleMaskToBitmap(mask, ref selection, i, hasNulls, nullBitmap);
+                // Apply mask to bitmap (nulls already filtered out)
+                ApplyDoubleMaskToBitmap(mask, ref selection, i);
             }
 
-            // Scalar tail
+            // Scalar tail (nulls already filtered out)
             for (; i < length; i++)
             {
                 if (!selection[i]) continue;
-                if (hasNulls && IsNull(nullBitmap, i))
-                {
-                    selection.Clear(i);
-                    continue;
-                }
                 if (!EvaluateScalar(values[i]))
                 {
                     selection.Clear(i);
@@ -625,15 +653,10 @@ public sealed class DoubleComparisonPredicate : ColumnPredicate
         }
         else
         {
-            // Scalar fallback for non-AVX2 systems
+            // Scalar fallback for non-AVX2 systems (nulls already filtered out)
             for (int i = 0; i < length; i++)
             {
                 if (!selection[i]) continue;
-                if (hasNulls && IsNull(nullBitmap, i))
-                {
-                    selection.Clear(i);
-                    continue;
-                }
                 if (!EvaluateScalar(values[i]))
                 {
                     selection.Clear(i);
@@ -643,10 +666,38 @@ public sealed class DoubleComparisonPredicate : ColumnPredicate
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ApplyDoubleMaskToBitmap(Vector256<double> mask, ref SelectionBitmap selection, int startIndex, bool hasNulls, ReadOnlySpan<byte> nullBitmap)
+    private void ApplyDoubleMaskToBitmap(Vector256<double> mask, ref SelectionBitmap selection, int startIndex)
     {
         // Use MoveMask to convert SIMD mask to 4-bit mask
         // For doubles, we get 4 bits (one per 64-bit element)
+        // Nulls were already filtered out in bulk, so no need to check here
+        if (Avx.IsSupported)
+        {
+            var byteMask = (byte)Avx.MoveMask(mask);
+            
+            // Apply the 4-bit mask - AndMask4 automatically ANDs with existing
+            selection.AndMask4(startIndex, byteMask);
+        }
+        else
+        {
+            // Scalar fallback (nulls already filtered out)
+            for (int j = 0; j < 4; j++)
+            {
+                var idx = startIndex + j;
+                if (!selection[idx]) continue;
+                
+                if (BitConverter.DoubleToInt64Bits(mask.GetElement(j)) == 0)
+                {
+                    selection.Clear(idx);
+                }
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ApplyDoubleMaskToBitmapWithNullCheck(Vector256<double> mask, ref SelectionBitmap selection, int startIndex, bool hasNulls, ReadOnlySpan<byte> nullBitmap)
+    {
+        // Version used by EvaluateRange where bulk null filtering wasn't applied
         if (Avx.IsSupported)
         {
             var byteMask = (byte)Avx.MoveMask(mask);
@@ -657,12 +708,11 @@ public sealed class DoubleComparisonPredicate : ColumnPredicate
                 byteMask = ApplyNullMask4Vectorized(byteMask, nullBitmap, startIndex);
             }
             
-            // Apply the 4-bit mask - AndMask4 automatically ANDs with existing
             selection.AndMask4(startIndex, byteMask);
         }
         else
         {
-            // Scalar fallback
+            // Scalar fallback with null check
             for (int j = 0; j < 4; j++)
             {
                 var idx = startIndex + j;
@@ -826,7 +876,9 @@ public sealed class DoubleComparisonPredicate : ColumnPredicate
                     _ => Vector256<double>.Zero
                 };
 
-                ApplyDoubleMaskToBitmap(mask, ref selection, i, hasNulls, nullBitmap);
+                // For range evaluation, we still need per-element null checks
+                // since bulk filtering wasn't applied (parallel execution path)
+                ApplyDoubleMaskToBitmapWithNullCheck(mask, ref selection, i, hasNulls, nullBitmap);
             }
         }
 
