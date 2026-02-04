@@ -58,70 +58,68 @@ public sealed class QueryPlanCacheScenario : BaseScenario
         CurrentPhases.Clear();
         var sw = Stopwatch.StartNew();
 
-        // Get a single query instance to reuse the same provider (and cache)
-        // In real applications, you would typically reuse the same IQueryable
-        var query = Data.AsQueryable();
-        var provider = (ArrowQueryProvider)query.Provider;
-        
-        // Clear cache for consistent baseline
-        provider.ClearQueryPlanCache();
+        // Clear cache for consistent baseline (cache is now at FrozenArrow level)
+        Data.ClearQueryPlanCache();
 
         // Phase 1: Cold query (cache miss) - First execution of a query pattern
         // The expression tree is analyzed and the plan is cached
+        // NOTE: Each AsQueryable() call creates a new provider, but they all share
+        // the same cache from the FrozenArrow instance
         StartPhase("ColdQuery_Any");
-        var coldResult = query.Where(x => x.Age > 30).Any();
+        var coldResult = Data.AsQueryable().Where(x => x.Age > 30).Any();
         EndPhase("ColdQuery_Any");
         _coldQueryTimeUs = CurrentPhases["ColdQuery_Any"];
 
         // Phase 2: Warm query (cache hit) - Same query structure, plan retrieved from cache
-        // Note: We create new query expressions but they have the same structure
+        // Each iteration uses a NEW AsQueryable() call - cache is still shared!
         StartPhase("WarmQuery_Any_x10");
         for (int i = 0; i < 10; i++)
         {
-            _ = query.Where(x => x.Age > 30).Any();
+            // Each iteration uses a NEW AsQueryable() - cache is still shared at FrozenArrow level!
+            _ = Data.AsQueryable().Where(x => x.Age > 30).Any();
         }
         EndPhase("WarmQuery_Any_x10");
         _warmQueryTimeUs = CurrentPhases["WarmQuery_Any_x10"] / 10.0; // Average per query
 
         // Phase 3: Different cold query (cache miss) - different predicate pattern
         StartPhase("ColdQuery_First");
-        var firstResult = query.Where(x => x.Salary > 50000).First();
+        var firstResult = Data.AsQueryable().Where(x => x.Salary > 50000).First();
         EndPhase("ColdQuery_First");
 
         // Phase 4: Warm query for the same First pattern (cache hit)
         StartPhase("WarmQuery_First_x10");
         for (int i = 0; i < 10; i++)
         {
-            _ = query.Where(x => x.Salary > 50000).First();
+            _ = Data.AsQueryable().Where(x => x.Salary > 50000).First();
         }
         EndPhase("WarmQuery_First_x10");
 
         // Phase 5: Cold query with multi-predicate filter (cache miss)
         StartPhase("ColdQuery_Count");
-        var count = query.Where(x => x.Age > 30 && x.IsActive).Count();
+        var count = Data.AsQueryable().Where(x => x.Age > 30 && x.IsActive).Count();
         EndPhase("ColdQuery_Count");
 
         // Phase 6: Warm query for the same Count pattern (cache hit)
         StartPhase("WarmQuery_Count_x10");
         for (int i = 0; i < 10; i++)
         {
-            _ = query.Where(x => x.Age > 30 && x.IsActive).Count();
+            _ = Data.AsQueryable().Where(x => x.Age > 30 && x.IsActive).Count();
         }
         EndPhase("WarmQuery_Count_x10");
 
         // Phase 7: Different queries with different constants (each is a separate cache entry)
         // These will all be cache misses since each has a different constant value
         StartPhase("DifferentQueries_x5");
-        _ = query.Where(x => x.Age > 25).Any();
-        _ = query.Where(x => x.Age > 26).Any();
-        _ = query.Where(x => x.Age > 27).Any();
-        _ = query.Where(x => x.Age > 28).Any();
-        _ = query.Where(x => x.Age > 29).Any();
+        _ = Data.AsQueryable().Where(x => x.Age > 25).Any();
+        _ = Data.AsQueryable().Where(x => x.Age > 26).Any();
+        _ = Data.AsQueryable().Where(x => x.Age > 27).Any();
+        _ = Data.AsQueryable().Where(x => x.Age > 28).Any();
+        _ = Data.AsQueryable().Where(x => x.Age > 29).Any();
         EndPhase("DifferentQueries_x5");
 
-        // Capture cache statistics
-        _cacheHits = provider.QueryPlanCacheStatistics.Hits;
-        _cacheMisses = provider.QueryPlanCacheStatistics.Misses;
+        // Capture cache statistics from the FrozenArrow instance
+        _cacheHits = Data.QueryPlanCacheStatistics.Hits;
+        _cacheMisses = Data.QueryPlanCacheStatistics.Misses;
 
         return (
             coldResult && firstResult != null,

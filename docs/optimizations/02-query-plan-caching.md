@@ -2,7 +2,9 @@
 
 ## Summary
 
-Implemented query plan caching to eliminate repeated expression tree analysis overhead. This optimization caches analyzed `QueryPlan` objects by expression structure, avoiding the ~2-3ms cost of walking expression trees for repeated queries.
+Implemented query plan caching to eliminate repeated expression tree analysis overhead. This optimization caches analyzed `QueryPlan` objects by expression structure at the `FrozenArrow<T>` level, avoiding the ~2-3ms cost of walking expression trees for repeated queries. 
+
+**Key benefit**: Users don't need to do anything special - every call to `AsQueryable()` automatically shares the cache.
 
 **Date**: January 2025  
 **Priority**: P1 (High Impact, Medium Effort)  
@@ -12,7 +14,7 @@ Implemented query plan caching to eliminate repeated expression tree analysis ov
 
 ## What
 
-Added a `QueryPlanCache` that stores analyzed query plans keyed by the structural representation of LINQ expressions. When the same query is executed multiple times, the cached plan is returned instead of re-analyzing the expression tree.
+Added a `QueryPlanCache` stored at the `FrozenArrow<T>` level that is shared by all `ArrowQueryProvider` instances created via `AsQueryable()`. When the same query is executed multiple times, the cached plan is returned instead of re-analyzing the expression tree.
 
 ### New Components
 
@@ -36,11 +38,15 @@ Added a `QueryPlanCache` that stores analyzed query plans keyed by the structura
 
 ### Modified Components
 
-1. **`ArrowQueryProvider`** (`src/FrozenArrow/Query/ArrowQuery.cs`)
-   - Added `_queryPlanCache` field
-   - Added `QueryPlanCacheOptions` property for configuration
+1. **`FrozenArrow<T>`** (`src/FrozenArrow/FrozenArrow.cs`)
+   - Added `_queryPlanCache` field (shared by all providers)
    - Added `QueryPlanCacheStatistics` property for monitoring
+   - Added `CachedQueryPlanCount` property
    - Added `ClearQueryPlanCache()` method
+
+2. **`ArrowQueryProvider`** (`src/FrozenArrow/Query/ArrowQuery.cs`)
+   - Now receives cache from `FrozenArrow<T>` source instead of creating its own
+   - Still exposes `QueryPlanCacheStatistics` property (delegates to shared cache)
    - Modified `AnalyzeExpression()` to check cache first
 
 ---
@@ -90,6 +96,12 @@ This key includes:
 ### Cache Lookup Flow
 
 ```
+data.AsQueryable().Where(...).Any()
+    ?
+    ?
+ArrowQueryProvider(source) ??? Gets shared cache from FrozenArrow<T>
+    ?
+    ?
 Execute<TResult>(expression)
     ?
     ?
@@ -115,65 +127,49 @@ AnalyzeExpression(expression)
 
 - `ConcurrentDictionary` for lock-free reads
 - `Interlocked` operations for statistics
-- Cache is per-provider instance (no cross-query interference)
+- Cache is stored at `FrozenArrow<T>` level, shared across all providers
 
 ### Memory Management
 
-- Default capacity: 256 plans
+- Default capacity: 256 plans per `FrozenArrow<T>` instance
 - LRU eviction: Removes oldest 25% when over capacity
 - Each entry: ~500 bytes (key + plan overhead)
-- Max memory: ~128KB per provider
+- Max memory: ~128KB per `FrozenArrow<T>` instance
 
 ---
 
 ## Configuration
 
 ```csharp
-// IMPORTANT: Reuse the same IQueryable to benefit from caching
-var query = data.AsQueryable();  // Creates provider with cache
+// The cache is automatically shared across all AsQueryable() calls on the same FrozenArrow instance
+// No special usage pattern required!
 
-// These queries all share the same cache
-var result1 = query.Where(x => x.Age > 30).Any();        // Cache miss
-var result2 = query.Where(x => x.Age > 30).Any();        // Cache HIT!
-var result3 = query.Where(x => x.Salary > 50000).First(); // Cache miss
-var result4 = query.Where(x => x.Salary > 50000).First(); // Cache HIT!
+var result1 = data.AsQueryable().Where(x => x.Age > 30).Any();  // Cache miss
+var result2 = data.AsQueryable().Where(x => x.Age > 30).Any();  // Cache HIT!
+var result3 = data.AsQueryable().Where(x => x.Salary > 50000).First(); // Cache miss
+var result4 = data.AsQueryable().Where(x => x.Salary > 50000).First(); // Cache HIT!
 
-// Access via ArrowQueryProvider
-var provider = (ArrowQueryProvider)query.Provider;
+// Monitor cache performance directly on the FrozenArrow instance
+Console.WriteLine($"Hit Rate: {data.QueryPlanCacheStatistics.HitRate:P1}");
+Console.WriteLine($"Cached Plans: {data.CachedQueryPlanCount}");
 
-// Configure cache options
-provider.QueryPlanCacheOptions = new QueryPlanCacheOptions
-{
-    EnableCaching = true,     // Default: true
-    MaxCacheSize = 256        // Default: 256
-};
+// Clear cache if needed (e.g., memory pressure)
+data.ClearQueryPlanCache();
 
-// Monitor cache performance
-var stats = provider.QueryPlanCacheStatistics;
-Console.WriteLine($"Hit Rate: {stats.HitRate:P1}");
-
-// Clear cache if needed
-provider.ClearQueryPlanCache();
-```
-
-### Important: Cache Scope
-
-The query plan cache is **per-provider**, and each call to `AsQueryable()` creates a new provider. For maximum cache benefit:
-
-```csharp
-// ? GOOD: Reuse the same IQueryable
+// You can also access cache via the provider if needed
 var query = data.AsQueryable();
-for (int i = 0; i < 1000; i++)
-{
-    var result = query.Where(x => x.Age > 30).Any();  // 999 cache hits!
-}
-
-// ? SUBOPTIMAL: New provider each time
-for (int i = 0; i < 1000; i++)
-{
-    var result = data.AsQueryable().Where(x => x.Age > 30).Any();  // No cache reuse
-}
+var provider = (ArrowQueryProvider)query.Provider;
+var stats = provider.QueryPlanCacheStatistics;  // Same stats as data.QueryPlanCacheStatistics
 ```
+
+### Cache Scope
+
+The query plan cache is stored at the **`FrozenArrow<T>` level**, ensuring:
+
+- ? All `AsQueryable()` calls share the same cache
+- ? Users don't need to pin/reuse `IQueryable` instances  
+- ? Natural usage patterns benefit from caching automatically
+- ? Different `FrozenArrow<T>` instances have independent caches
 
 ---
 
@@ -212,7 +208,6 @@ From the `querycache` profiling scenario:
 
 - ? One-time queries (no cache reuse)
 - ? Queries with different constants each time
-- ? Creating new IQueryable for each query (no cache sharing)
 - ? Very large aggregations (execution dominates parsing)
 
 ---

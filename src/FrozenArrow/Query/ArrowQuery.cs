@@ -136,9 +136,6 @@ public sealed class ArrowQueryProvider : IQueryProvider
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         
-        // Initialize query plan cache
-        _queryPlanCache = new QueryPlanCache();
-        
         // Extract type information
         var sourceType = source.GetType();
         var arrowCollectionType = sourceType;
@@ -162,21 +159,22 @@ public sealed class ArrowQueryProvider : IQueryProvider
             .GetMethod(nameof(ExtractSourceData), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
             .MakeGenericMethod(_elementType);
         
-        var (recordBatch, count, columnIndexMap, createItem, zoneMap) = 
-            ((RecordBatch, int, Dictionary<string, int>, Func<RecordBatch, int, object>, ZoneMap?))extractMethod.Invoke(null, [source])!;
+        var (recordBatch, count, columnIndexMap, createItem, zoneMap, queryPlanCache) = 
+            ((RecordBatch, int, Dictionary<string, int>, Func<RecordBatch, int, object>, ZoneMap?, QueryPlanCache))extractMethod.Invoke(null, [source])!;
         
         _recordBatch = recordBatch;
         _count = count;
         _columnIndexMap = columnIndexMap;
         _createItem = createItem;
         _zoneMap = zoneMap;
+        _queryPlanCache = queryPlanCache;
     }
 
     /// <summary>
     /// Generic helper to extract data from FrozenArrow&lt;T&gt; using internal accessors.
     /// This method uses direct property/method access instead of reflection for better performance.
     /// </summary>
-    private static (RecordBatch, int, Dictionary<string, int>, Func<RecordBatch, int, object>, ZoneMap?) ExtractSourceData<T>(object source)
+    private static (RecordBatch, int, Dictionary<string, int>, Func<RecordBatch, int, object>, ZoneMap?, QueryPlanCache) ExtractSourceData<T>(object source)
     {
         var typedSource = (FrozenArrow<T>)source;
         
@@ -198,7 +196,11 @@ public sealed class ArrowQueryProvider : IQueryProvider
         // Build zone maps for the RecordBatch
         var zoneMap = ZoneMap.BuildFromRecordBatch(recordBatch, chunkSize: ParallelQueryOptions.Default.ChunkSize);
         
-        return (recordBatch, count, columnIndexMap, createItem, zoneMap);
+        // Get the shared query plan cache from the source
+        // This ensures all queries against the same FrozenArrow instance share the cache
+        var queryPlanCache = typedSource.QueryPlanCache;
+        
+        return (recordBatch, count, columnIndexMap, createItem, zoneMap, queryPlanCache);
     }
 
     internal FrozenArrow<TElement> GetSource<TElement>()

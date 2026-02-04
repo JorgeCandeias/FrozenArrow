@@ -1,5 +1,6 @@
 using Apache.Arrow;
 using Apache.Arrow.Ipc;
+using FrozenArrow.Query;
 using System.Buffers;
 using System.Collections;
 
@@ -40,6 +41,12 @@ public abstract class FrozenArrow<T>(
     private bool _disposed;
 
     /// <summary>
+    /// Query plan cache shared by all queries against this FrozenArrow instance.
+    /// This ensures that repeated calls to AsQueryable() benefit from cached query plans.
+    /// </summary>
+    private readonly QueryPlanCache _queryPlanCache = new();
+
+    /// <summary>
     /// Gets the number of elements in the collection.
     /// </summary>
     public int Count => _count;
@@ -49,6 +56,25 @@ public abstract class FrozenArrow<T>(
     /// May be null if statistics collection was disabled.
     /// </summary>
     public FrozenArrowBuildStatistics? BuildStatistics => _buildStatistics;
+
+    /// <summary>
+    /// Gets the query plan cache statistics for monitoring cache performance.
+    /// </summary>
+    /// <remarks>
+    /// This cache is shared across all queries created via AsQueryable() on this instance.
+    /// The cache eliminates repeated expression tree analysis for the same query patterns.
+    /// </remarks>
+    public CacheStatistics QueryPlanCacheStatistics => _queryPlanCache.Statistics;
+
+    /// <summary>
+    /// Gets the number of cached query plans for this instance.
+    /// </summary>
+    public int CachedQueryPlanCount => _queryPlanCache.Count;
+
+    /// <summary>
+    /// Clears the query plan cache for this instance.
+    /// </summary>
+    public void ClearQueryPlanCache() => _queryPlanCache.Clear();
 
     /// <summary>
     /// Creates an item of type T from the record batch at the specified index.
@@ -68,6 +94,11 @@ public abstract class FrozenArrow<T>(
     /// Internal accessor for creating items. Used by the query engine to avoid reflection overhead.
     /// </summary>
     internal T CreateItemInternal(RecordBatch recordBatch, int index) => CreateItem(recordBatch, index);
+
+    /// <summary>
+    /// Internal accessor for the query plan cache. Used by the query provider.
+    /// </summary>
+    internal QueryPlanCache QueryPlanCache => _queryPlanCache;
 
     /// <summary>
     /// Returns an enumerator that iterates through the collection.
