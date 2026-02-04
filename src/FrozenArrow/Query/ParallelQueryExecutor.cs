@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using Apache.Arrow;
 
 namespace FrozenArrow.Query;
@@ -133,12 +135,27 @@ internal static class ParallelQueryExecutor
             }
 
             // Apply each predicate to this chunk using the buffer directly
+            // OPTIMIZATION: Use devirtualized dispatch for common predicate types
             for (int predIdx = 0; predIdx < predicates.Count; predIdx++)
             {
                 var predicate = predicates[predIdx];
                 var column = columns[predIdx];
                 
-                predicate.EvaluateRangeWithBuffer(column, selectionBuffer, startRow, endRow);
+                // Fast-path: Check concrete type and call non-virtual method
+                // This eliminates virtual dispatch overhead for 90%+ of predicates
+                if (predicate is Int32ComparisonPredicate int32Pred)
+                {
+                    EvaluateInt32PredicateRange(int32Pred, column, selectionBuffer, startRow, endRow);
+                }
+                else if (predicate is DoubleComparisonPredicate doublePred)
+                {
+                    EvaluateDoublePredicateRange(doublePred, column, selectionBuffer, startRow, endRow);
+                }
+                else
+                {
+                    // Fallback: virtual call for uncommon predicate types
+                    predicate.EvaluateRangeWithBuffer(column, selectionBuffer, startRow, endRow);
+                }
             }
         });
     }
@@ -181,5 +198,446 @@ internal static class ParallelQueryExecutor
         {
             predicate.Evaluate(batch, ref selection);
         }
+    }
+
+    /// <summary>
+    /// Devirtualized Int32 predicate evaluation for parallel execution.
+    /// This method eliminates virtual dispatch overhead by directly calling
+    /// the specialized SIMD implementation for Int32 comparisons.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void EvaluateInt32PredicateRange(
+        Int32ComparisonPredicate predicate,
+        IArrowArray column,
+        ulong[] selectionBuffer,
+        int startIndex,
+        int endIndex)
+    {
+        // Cast to Int32Array for SIMD-optimized evaluation
+        if (column is Int32Array int32Array)
+        {
+            EvaluateInt32ArrayRange(predicate, int32Array, selectionBuffer, startIndex, endIndex);
+        }
+        else
+        {
+            // Fallback for dictionary-encoded or other array types
+            EvaluateInt32GenericRange(predicate, column, selectionBuffer, startIndex, endIndex);
+        }
+    }
+
+    /// <summary>
+    /// SIMD-optimized evaluation for Int32Array ranges.
+    /// Processes 8 elements at a time using AVX2 when available.
+    /// </summary>
+    private static void EvaluateInt32ArrayRange(
+        Int32ComparisonPredicate predicate,
+        Int32Array array,
+        ulong[] selectionBuffer,
+        int startIndex,
+        int endIndex)
+    {
+        var values = array.Values;
+        var nullBitmap = array.NullBitmapBuffer.Span;
+        var hasNulls = array.NullCount > 0;
+        int i = startIndex;
+
+        // SIMD path: process 8 elements at a time with AVX2
+        if (Vector256.IsHardwareAccelerated && (endIndex - startIndex) >= 8)
+        {
+            var compareValue = Vector256.Create(predicate.Value);
+            ref int valuesRef = ref Unsafe.AsRef(in values[0]);
+            
+            int vectorEnd = ((endIndex - startIndex) >> 3) << 3; // Round down to multiple of 8
+            vectorEnd += startIndex;
+
+            for (; i < vectorEnd; i += 8)
+            {
+                // Check selection first - skip if all already filtered
+                if (!AnySelected(selectionBuffer, i, 8))
+                    continue;
+
+                var data = Vector256.LoadUnsafe(ref Unsafe.Add(ref valuesRef, i));
+                
+                Vector256<int> mask = predicate.Operator switch
+                {
+                    ComparisonOperator.Equal => Vector256.Equals(data, compareValue),
+                    ComparisonOperator.NotEqual => ~Vector256.Equals(data, compareValue),
+                    ComparisonOperator.LessThan => Vector256.LessThan(data, compareValue),
+                    ComparisonOperator.LessThanOrEqual => Vector256.LessThanOrEqual(data, compareValue),
+                    ComparisonOperator.GreaterThan => Vector256.GreaterThan(data, compareValue),
+                    ComparisonOperator.GreaterThanOrEqual => Vector256.GreaterThanOrEqual(data, compareValue),
+                    _ => Vector256<int>.Zero
+                };
+
+                // Apply mask with null checks
+                if (Avx2.IsSupported)
+                {
+                    var floatMask = mask.AsSingle();
+                    var byteMask = (byte)Avx.MoveMask(floatMask);
+                    
+                    // Handle nulls
+                    if (hasNulls)
+                    {
+                        byteMask = ApplyNullMask8(byteMask, nullBitmap, i);
+                    }
+                    
+                    // Apply mask to selection buffer
+                    AndMask8ToBuffer(selectionBuffer, i, byteMask);
+                }
+                else
+                {
+                    // Scalar fallback
+                    for (int j = 0; j < 8; j++)
+                    {
+                        var idx = i + j;
+                        if (!SelectionBitmap.IsSet(selectionBuffer, idx)) continue;
+                        
+                        if (hasNulls && IsNull(nullBitmap, idx))
+                        {
+                            SelectionBitmap.ClearBit(selectionBuffer, idx);
+                            continue;
+                        }
+                        
+                        if (mask.GetElement(j) == 0)
+                        {
+                            SelectionBitmap.ClearBit(selectionBuffer, idx);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Scalar tail
+        for (; i < endIndex; i++)
+        {
+            if (!SelectionBitmap.IsSet(selectionBuffer, i)) continue;
+            
+            if (hasNulls && IsNull(nullBitmap, i))
+            {
+                SelectionBitmap.ClearBit(selectionBuffer, i);
+                continue;
+            }
+            
+            var columnValue = values[i];
+            var matches = predicate.Operator switch
+            {
+                ComparisonOperator.Equal => columnValue == predicate.Value,
+                ComparisonOperator.NotEqual => columnValue != predicate.Value,
+                ComparisonOperator.LessThan => columnValue < predicate.Value,
+                ComparisonOperator.LessThanOrEqual => columnValue <= predicate.Value,
+                ComparisonOperator.GreaterThan => columnValue > predicate.Value,
+                ComparisonOperator.GreaterThanOrEqual => columnValue >= predicate.Value,
+                _ => false
+            };
+            
+            if (!matches)
+            {
+                SelectionBitmap.ClearBit(selectionBuffer, i);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Fallback evaluation for non-Int32Array types (dictionary-encoded, etc.).
+    /// </summary>
+    private static void EvaluateInt32GenericRange(
+        Int32ComparisonPredicate predicate,
+        IArrowArray column,
+        ulong[] selectionBuffer,
+        int startIndex,
+        int endIndex)
+    {
+        for (int i = startIndex; i < endIndex; i++)
+        {
+            if (!SelectionBitmap.IsSet(selectionBuffer, i)) continue;
+            
+            if (column.IsNull(i))
+            {
+                SelectionBitmap.ClearBit(selectionBuffer, i);
+                continue;
+            }
+            
+            var columnValue = RunLengthEncodedArrayBuilder.GetInt32Value(column, i);
+            var matches = predicate.Operator switch
+            {
+                ComparisonOperator.Equal => columnValue == predicate.Value,
+                ComparisonOperator.NotEqual => columnValue != predicate.Value,
+                ComparisonOperator.LessThan => columnValue < predicate.Value,
+                ComparisonOperator.LessThanOrEqual => columnValue <= predicate.Value,
+                ComparisonOperator.GreaterThan => columnValue > predicate.Value,
+                ComparisonOperator.GreaterThanOrEqual => columnValue >= predicate.Value,
+                _ => false
+            };
+            
+            if (!matches)
+            {
+                SelectionBitmap.ClearBit(selectionBuffer, i);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Devirtualized Double predicate evaluation for parallel execution.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void EvaluateDoublePredicateRange(
+        DoubleComparisonPredicate predicate,
+        IArrowArray column,
+        ulong[] selectionBuffer,
+        int startIndex,
+        int endIndex)
+    {
+        if (column is DoubleArray doubleArray)
+        {
+            EvaluateDoubleArrayRange(predicate, doubleArray, selectionBuffer, startIndex, endIndex);
+        }
+        else
+        {
+            EvaluateDoubleGenericRange(predicate, column, selectionBuffer, startIndex, endIndex);
+        }
+    }
+
+    /// <summary>
+    /// SIMD-optimized evaluation for DoubleArray ranges.
+    /// Processes 4 elements at a time using AVX2.
+    /// </summary>
+    private static void EvaluateDoubleArrayRange(
+        DoubleComparisonPredicate predicate,
+        DoubleArray array,
+        ulong[] selectionBuffer,
+        int startIndex,
+        int endIndex)
+    {
+        var values = array.Values;
+        var nullBitmap = array.NullBitmapBuffer.Span;
+        var hasNulls = array.NullCount > 0;
+        int i = startIndex;
+
+        // SIMD path: process 4 elements at a time
+        if (Vector256.IsHardwareAccelerated && (endIndex - startIndex) >= 4)
+        {
+            var compareValue = Vector256.Create(predicate.Value);
+            ref double valuesRef = ref Unsafe.AsRef(in values[0]);
+            
+            int vectorEnd = ((endIndex - startIndex) >> 2) << 2;
+            vectorEnd += startIndex;
+
+            for (; i < vectorEnd; i += 4)
+            {
+                if (!AnySelected(selectionBuffer, i, 4))
+                    continue;
+
+                var data = Vector256.LoadUnsafe(ref Unsafe.Add(ref valuesRef, i));
+                
+                Vector256<double> mask = predicate.Operator switch
+                {
+                    ComparisonOperator.Equal => Vector256.Equals(data, compareValue),
+                    ComparisonOperator.NotEqual => ~Vector256.Equals(data, compareValue),
+                    ComparisonOperator.LessThan => Vector256.LessThan(data, compareValue),
+                    ComparisonOperator.LessThanOrEqual => Vector256.LessThanOrEqual(data, compareValue),
+                    ComparisonOperator.GreaterThan => Vector256.GreaterThan(data, compareValue),
+                    ComparisonOperator.GreaterThanOrEqual => Vector256.GreaterThanOrEqual(data, compareValue),
+                    _ => Vector256<double>.Zero
+                };
+
+                if (Avx.IsSupported)
+                {
+                    var byteMask = (byte)Avx.MoveMask(mask);
+                    
+                    if (hasNulls)
+                    {
+                        byteMask = ApplyNullMask4(byteMask, nullBitmap, i);
+                    }
+                    
+                    AndMask4ToBuffer(selectionBuffer, i, byteMask);
+                }
+                else
+                {
+                    for (int j = 0; j < 4; j++)
+                    {
+                        var idx = i + j;
+                        if (!SelectionBitmap.IsSet(selectionBuffer, idx)) continue;
+                        
+                        if (hasNulls && IsNull(nullBitmap, idx))
+                        {
+                            SelectionBitmap.ClearBit(selectionBuffer, idx);
+                            continue;
+                        }
+                        
+                        if (BitConverter.DoubleToInt64Bits(mask.GetElement(j)) == 0)
+                        {
+                            SelectionBitmap.ClearBit(selectionBuffer, idx);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Scalar tail
+        for (; i < endIndex; i++)
+        {
+            if (!SelectionBitmap.IsSet(selectionBuffer, i)) continue;
+            
+            if (hasNulls && IsNull(nullBitmap, i))
+            {
+                SelectionBitmap.ClearBit(selectionBuffer, i);
+                continue;
+            }
+            
+            var columnValue = values[i];
+            var matches = predicate.Operator switch
+            {
+                ComparisonOperator.Equal => columnValue == predicate.Value,
+                ComparisonOperator.NotEqual => columnValue != predicate.Value,
+                ComparisonOperator.LessThan => columnValue < predicate.Value,
+                ComparisonOperator.LessThanOrEqual => columnValue <= predicate.Value,
+                ComparisonOperator.GreaterThan => columnValue > predicate.Value,
+                ComparisonOperator.GreaterThanOrEqual => columnValue >= predicate.Value,
+                _ => false
+            };
+            
+            if (!matches)
+            {
+                SelectionBitmap.ClearBit(selectionBuffer, i);
+            }
+        }
+    }
+
+    private static void EvaluateDoubleGenericRange(
+        DoubleComparisonPredicate predicate,
+        IArrowArray column,
+        ulong[] selectionBuffer,
+        int startIndex,
+        int endIndex)
+    {
+        for (int i = startIndex; i < endIndex; i++)
+        {
+            if (!SelectionBitmap.IsSet(selectionBuffer, i)) continue;
+            
+            if (column.IsNull(i))
+            {
+                SelectionBitmap.ClearBit(selectionBuffer, i);
+                continue;
+            }
+            
+            var columnValue = RunLengthEncodedArrayBuilder.GetDoubleValue(column, i);
+            var matches = predicate.Operator switch
+            {
+                ComparisonOperator.Equal => columnValue == predicate.Value,
+                ComparisonOperator.NotEqual => columnValue != predicate.Value,
+                ComparisonOperator.LessThan => columnValue < predicate.Value,
+                ComparisonOperator.LessThanOrEqual => columnValue <= predicate.Value,
+                ComparisonOperator.GreaterThan => columnValue > predicate.Value,
+                ComparisonOperator.GreaterThanOrEqual => columnValue >= predicate.Value,
+                _ => false
+            };
+            
+            if (!matches)
+            {
+                SelectionBitmap.ClearBit(selectionBuffer, i);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Helper: Check if any bits in a range are set (early-exit optimization).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool AnySelected(ulong[] buffer, int startIndex, int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            if (SelectionBitmap.IsSet(buffer, startIndex + i))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Helper: Apply null mask to 8-bit comparison result.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static byte ApplyNullMask8(byte mask, ReadOnlySpan<byte> nullBitmap, int startIndex)
+    {
+        var byteIndex = startIndex >> 3;
+        var bitOffset = startIndex & 7;
+        
+        byte nullMask;
+        if (bitOffset == 0)
+        {
+            nullMask = byteIndex < nullBitmap.Length ? nullBitmap[byteIndex] : (byte)0xFF;
+        }
+        else
+        {
+            var lowByte = byteIndex < nullBitmap.Length ? nullBitmap[byteIndex] : (byte)0xFF;
+            var highByte = (byteIndex + 1) < nullBitmap.Length ? nullBitmap[byteIndex + 1] : (byte)0xFF;
+            nullMask = (byte)((lowByte >> bitOffset) | (highByte << (8 - bitOffset)));
+        }
+        
+        return (byte)(mask & nullMask);
+    }
+
+    /// <summary>
+    /// Helper: Apply null mask to 4-bit comparison result.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static byte ApplyNullMask4(byte mask, ReadOnlySpan<byte> nullBitmap, int startIndex)
+    {
+        var byteIndex = startIndex >> 3;
+        var bitOffset = startIndex & 7;
+        
+        byte nullMask;
+        if (bitOffset <= 4)
+        {
+            nullMask = byteIndex < nullBitmap.Length ? (byte)(nullBitmap[byteIndex] >> bitOffset) : (byte)0x0F;
+        }
+        else
+        {
+            var lowByte = byteIndex < nullBitmap.Length ? nullBitmap[byteIndex] : (byte)0xFF;
+            var highByte = (byteIndex + 1) < nullBitmap.Length ? nullBitmap[byteIndex + 1] : (byte)0xFF;
+            nullMask = (byte)((lowByte >> bitOffset) | (highByte << (8 - bitOffset)));
+        }
+        
+        return (byte)(mask & (nullMask & 0x0F));
+    }
+
+    /// <summary>
+    /// Helper: Check if a bit is null in Arrow null bitmap.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsNull(ReadOnlySpan<byte> nullBitmap, int index)
+    {
+        if (nullBitmap.IsEmpty) return false;
+        return (nullBitmap[index >> 3] & (1 << (index & 7))) == 0;
+    }
+
+    /// <summary>
+    /// Helper: AND 8-bit mask to selection buffer at specified index.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void AndMask8ToBuffer(ulong[] buffer, int startIndex, byte mask)
+    {
+        var blockIndex = startIndex >> 6;
+        var bitOffset = startIndex & 63;
+        
+        var preserveMask = ~((ulong)0xFF << bitOffset);
+        var andMask = (ulong)mask << bitOffset;
+        
+        buffer[blockIndex] = (buffer[blockIndex] & preserveMask) | (buffer[blockIndex] & andMask);
+    }
+
+    /// <summary>
+    /// Helper: AND 4-bit mask to selection buffer at specified index.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void AndMask4ToBuffer(ulong[] buffer, int startIndex, byte mask)
+    {
+        var blockIndex = startIndex >> 6;
+        var bitOffset = startIndex & 63;
+        
+        var preserveMask = ~((ulong)0x0F << bitOffset);
+        var andMask = (ulong)(mask & 0x0F) << bitOffset;
+        
+        buffer[blockIndex] = (buffer[blockIndex] & preserveMask) | (buffer[blockIndex] & andMask);
     }
 }
