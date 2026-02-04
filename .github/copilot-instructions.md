@@ -369,6 +369,56 @@ When an optimization targets a specific pattern not well-covered by existing sce
    dotnet run -c Release -- -s {new-scenario} -r 1000000 --save baselines/baseline-{scenario-name}.json
    ```
 
+### Step 10: Create Optimization Documentation (REQUIRED)
+
+**MANDATORY for all optimization work:**
+
+1. **Determine next optimization number**:
+   - Check `docs/optimizations/00-optimization-index.md` for last used number
+   - Use next sequential number (e.g., if last is 14, use 15)
+
+2. **Create main documentation** (`docs/optimizations/{NN}-{name}.md`):
+   - Use **kebab-case** for name (e.g., `15-adaptive-query-execution.md`)
+   - Follow template at `docs/optimizations/TEMPLATE.md`
+   - Include all required sections:
+     - Summary (1-2 sentences)
+     - What Problem Does This Solve?
+     - How It Works
+     - Performance Characteristics
+     - Implementation Details
+     - Trade-offs
+     - Related Optimizations
+   - Include actual performance numbers from profiling verification
+   - Add code snippets showing before/after
+
+3. **Create summary (optional)** (`docs/optimizations/{NN}-{name}-summary.md`):
+   - Only for major optimizations
+   - High-level executive summary
+   - Key performance numbers
+   - Impact on different scenarios
+
+4. **Update index** (`docs/optimizations/00-optimization-index.md`):
+   - Add entry to optimization catalog table
+   - Update "Total Optimizations" count at bottom
+   - Add to appropriate synergy/pattern sections if applicable
+
+5. **Create pattern doc if reusable** (`docs/patterns/{name}-pattern.md`):
+   - Only if technique can be applied to other optimizations
+   - Document general approach, not specific implementation
+   - No numbering (patterns are alphabetical)
+
+**File Naming Convention:**
+```
+docs/optimizations/{NN}-{optimization-name}.md           # Main doc (REQUIRED)
+docs/optimizations/{NN}-{optimization-name}-summary.md   # Summary (OPTIONAL)
+docs/patterns/{pattern-name}-pattern.md                  # Pattern (IF REUSABLE)
+```
+
+**Examples:**
+- `15-adaptive-query-execution.md` - Main technical doc
+- `15-adaptive-query-execution-summary.md` - Executive summary
+- `adaptive-query-pattern.md` - Reusable pattern (in patterns folder)
+
 ---
 
 ## Code Quality Standards
