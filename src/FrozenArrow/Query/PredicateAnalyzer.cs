@@ -328,8 +328,45 @@ public sealed class PredicateAnalyzer : ExpressionVisitor
         {
             return TryGetConstantValue(unary.Operand, out value);
         }
+        
+        // Complex constant expressions (arithmetic, method calls, etc.)
+        // Try to evaluate the expression at compile time
+        try
+        {
+            // Check if this is a constant expression tree (no parameters)
+            if (IsConstantExpression(expr))
+            {
+                // Compile and evaluate the expression
+                var lambda = Expression.Lambda(expr);
+                var compiled = lambda.Compile();
+                value = compiled.DynamicInvoke();
+                return true;
+            }
+        }
+        catch
+        {
+            // If evaluation fails, return false
+            return false;
+        }
 
         return false;
+    }
+    
+    /// <summary>
+    /// Checks if an expression contains only constants and no parameters.
+    /// </summary>
+    private static bool IsConstantExpression(Expression expr)
+    {
+        return expr switch
+        {
+            ConstantExpression => true,
+            MemberExpression member => member.Expression == null || IsConstantExpression(member.Expression),
+            UnaryExpression unary => IsConstantExpression(unary.Operand),
+            BinaryExpression binary => IsConstantExpression(binary.Left) && IsConstantExpression(binary.Right),
+            MethodCallExpression method => (method.Object == null || IsConstantExpression(method.Object)) && method.Arguments.All(IsConstantExpression),
+            ParameterExpression => false,  // Has parameters - NOT constant
+            _ => false
+        };
     }
 
     private static ComparisonOperator? GetComparisonOperator(ExpressionType nodeType, bool isReversed)
