@@ -43,10 +43,12 @@ public abstract class ColumnPredicate
     /// </summary>
     /// <param name="batch">The Arrow record batch.</param>
     /// <param name="selection">The compact selection bitmap to update.</param>
-    public virtual void Evaluate(RecordBatch batch, ref SelectionBitmap selection)
+    /// <param name="endIndex">Optional end index (exclusive). If null, evaluates all rows.</param>
+    public virtual void Evaluate(RecordBatch batch, ref SelectionBitmap selection, int? endIndex = null)
     {
         var column = batch.Column(ColumnIndex);
-        EvaluateRange(column, ref selection, 0, batch.Length);
+        var actualEndIndex = endIndex ?? batch.Length;
+        EvaluateRange(column, ref selection, 0, actualEndIndex);
     }
 
     /// <summary>
@@ -202,19 +204,13 @@ public sealed class Int32ComparisonPredicate : ColumnPredicate
     /// SIMD-optimized evaluation for SelectionBitmap.
     /// Processes 8 Int32 values per iteration using AVX2 when available.
     /// </summary>
-    public override void Evaluate(RecordBatch batch, ref SelectionBitmap selection)
+    public override void Evaluate(RecordBatch batch, ref SelectionBitmap selection, int? endIndex = null)
     {
         var column = batch.Column(ColumnIndex);
+        var actualEndIndex = endIndex ?? batch.Length;
         
-        // For primitive Int32Array, use optimized SIMD path
-        if (column is Int32Array int32Array)
-        {
-            EvaluateInt32ArraySimd(int32Array, ref selection);
-            return;
-        }
-
-        // Fallback to scalar path for dictionary-encoded or other array types
-        base.Evaluate(batch, ref selection);
+        // Use EvaluateRange which already supports start/end indices
+        EvaluateRange(column, ref selection, 0, actualEndIndex);
     }
 
     private void EvaluateInt32ArraySimd(Int32Array array, ref SelectionBitmap selection)
@@ -597,19 +593,13 @@ public sealed class DoubleComparisonPredicate : ColumnPredicate
     /// SIMD-optimized evaluation for SelectionBitmap.
     /// Processes 4 double values per iteration using AVX2 when available.
     /// </summary>
-    public override void Evaluate(RecordBatch batch, ref SelectionBitmap selection)
+    public override void Evaluate(RecordBatch batch, ref SelectionBitmap selection, int? endIndex = null)
     {
         var column = batch.Column(ColumnIndex);
+        var actualEndIndex = endIndex ?? batch.Length;
         
-        // For primitive DoubleArray, use optimized SIMD path
-        if (column is DoubleArray doubleArray)
-        {
-            EvaluateDoubleArraySimd(doubleArray, ref selection);
-            return;
-        }
-
-        // Fallback to scalar path for dictionary-encoded or other array types
-        base.Evaluate(batch, ref selection);
+        // Use EvaluateRange which already supports start/end indices
+        EvaluateRange(column, ref selection, 0, actualEndIndex);
     }
 
     private void EvaluateDoubleArraySimd(DoubleArray array, ref SelectionBitmap selection)

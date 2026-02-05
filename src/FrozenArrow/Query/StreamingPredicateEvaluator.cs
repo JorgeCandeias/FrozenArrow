@@ -34,17 +34,22 @@ internal static class StreamingPredicateEvaluator
     /// <param name="predicates">The predicates that must all be satisfied.</param>
     /// <param name="zoneMap">Optional zone map for skip-scanning optimization.</param>
     /// <param name="chunkSize">Chunk size for zone map alignment (default: 16384).</param>
+    /// <param name="maxRowToEvaluate">Maximum row index to evaluate (for Take before Where). If null, evaluates all rows.</param>
     /// <returns>The index of the first matching row, or -1 if none found.</returns>
     public static int FindFirst(
         RecordBatch batch,
         IReadOnlyList<ColumnPredicate> predicates,
         ZoneMap? zoneMap = null,
-        int chunkSize = 16_384)
+        int chunkSize = 16_384,
+        int? maxRowToEvaluate = null)
     {
         if (predicates.Count == 0)
-            return batch.Length > 0 ? 0 : -1;
+        {
+            var effectiveRowCount = maxRowToEvaluate ?? batch.Length;
+            return effectiveRowCount > 0 ? 0 : -1;
+        }
 
-        var rowCount = batch.Length;
+        var rowCount = maxRowToEvaluate ?? batch.Length;
         
         // Reorder predicates by estimated selectivity (most selective first).
         // For short-circuit evaluation, this maximizes the chance of early rejection.
@@ -97,13 +102,15 @@ internal static class StreamingPredicateEvaluator
     /// <summary>
     /// Checks if any row matches all predicates (short-circuit on first match).
     /// </summary>
+    /// <param name="maxRowToEvaluate">Maximum row index to evaluate (for Take before Where). If null, evaluates all rows.</param>
     public static bool Any(
         RecordBatch batch,
         IReadOnlyList<ColumnPredicate> predicates,
         ZoneMap? zoneMap = null,
-        int chunkSize = 16_384)
+        int chunkSize = 16_384,
+        int? maxRowToEvaluate = null)
     {
-        return FindFirst(batch, predicates, zoneMap, chunkSize) >= 0;
+        return FindFirst(batch, predicates, zoneMap, chunkSize, maxRowToEvaluate) >= 0;
     }
 
     /// <summary>

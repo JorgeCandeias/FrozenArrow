@@ -27,15 +27,17 @@ internal static class SparseIndexCollector
     /// <param name="predicates">The predicates to evaluate.</param>
     /// <param name="zoneMap">Optional zone map for skip-scanning.</param>
     /// <param name="options">Parallel execution options.</param>
+    /// <param name="maxRowToEvaluate">Maximum row index to evaluate (for Take before Where). If null, evaluates all rows.</param>
     /// <returns>List of row indices that match all predicates.</returns>
     public static List<int> CollectMatchingIndices(
         RecordBatch batch,
         IReadOnlyList<ColumnPredicate> predicates,
         ZoneMap? zoneMap = null,
-        ParallelQueryOptions? options = null)
+        ParallelQueryOptions? options = null,
+        int? maxRowToEvaluate = null)
     {
         options ??= ParallelQueryOptions.Default;
-        var rowCount = batch.Length;
+        var rowCount = maxRowToEvaluate ?? batch.Length;
         
         // Reorder predicates by estimated selectivity (most selective first)
         predicates = PredicateReorderer.ReorderBySelectivity(predicates, zoneMap, rowCount);

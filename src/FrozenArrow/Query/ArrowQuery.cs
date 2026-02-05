@@ -265,35 +265,48 @@ public sealed class ArrowQueryProvider : IQueryProvider
         var isCountQuery = resultType == typeof(int) || resultType == typeof(long);
         if (plan.EstimatedSelectivity < 0.05 && plan.ColumnPredicates.Count > 0 && !isCountQuery)
         {
+            // Calculate effective row count for Take-before-Where patterns
+            int? maxRowForSparse = plan.PaginationBeforePredicates && plan.Take.HasValue && !plan.Skip.HasValue
+                ? Math.Min(_count, plan.Take.Value)
+                : null;
+            
             var matchingIndices = SparseIndexCollector.CollectMatchingIndices(
                 _recordBatch,
                 plan.ColumnPredicates,
                 _zoneMap,
-                ParallelOptions);
+                ParallelOptions,
+                maxRowForSparse);
             
             return ExecuteWithSparseIndices<TResult>(plan, matchingIndices, resultType);
         }
 
         // DENSE PATH: Build selection bitmap using pooled bitfield (8x more memory efficient than bool[])
-        using var selection = SelectionBitmap.Create(_count, initialValue: true);
-
         // Determine if we should apply Take before predicates
         // This happens when: Take is present, no Skip, has predicates, AND pagination comes before predicates
         bool applyTakeBeforePredicates = plan.Take.HasValue && !plan.Skip.HasValue && 
                                          plan.ColumnPredicates.Count > 0 && plan.PaginationBeforePredicates;
         
-        if (applyTakeBeforePredicates)
+        // Calculate effective row count to evaluate
+        // When Take comes before predicates (.Take(N).Where(...)), we only need to evaluate first N rows
+        int? maxRowToEvaluate = applyTakeBeforePredicates && plan.Take.HasValue 
+            ? Math.Min(_count, plan.Take.Value) 
+            : null;
+        
+        // Initialize bitmap: if Take comes before predicates, only set first N bits to true, rest are false
+        using var selection = SelectionBitmap.Create(_count, initialValue: !applyTakeBeforePredicates);
+        
+        if (applyTakeBeforePredicates && maxRowToEvaluate.HasValue)
         {
-            // Clear all bits beyond the Take limit BEFORE applying predicates
-            // This handles: .Take(20).Where(...) pattern
-            int takeLimit = plan.Take.GetValueOrDefault();
-            if (takeLimit < _count)
+            // For .Take(N).Where(...), set first N bits to true
+            // Predicates will then clear bits that don't match
+            for (int i = 0; i < maxRowToEvaluate.Value; i++)
             {
-                selection.ClearRange(takeLimit, _count - takeLimit);
+                selection.Set(i);
             }
         }
 
         // Apply column predicates using parallel execution when beneficial
+        // Pass maxRowToEvaluate to limit evaluation range for Take-before-Where patterns
         if (plan.ColumnPredicates.Count > 0)
         {
             ParallelQueryExecutor.EvaluatePredicatesParallel(
@@ -301,7 +314,8 @@ public sealed class ArrowQueryProvider : IQueryProvider
                 ref System.Runtime.CompilerServices.Unsafe.AsRef(in selection),
                 plan.ColumnPredicates,
                 ParallelOptions,
-                _zoneMap);
+                _zoneMap,
+                maxRowToEvaluate);
         }
 
         // Count selected rows using hardware popcount
@@ -332,7 +346,8 @@ public sealed class ArrowQueryProvider : IQueryProvider
             }
             
             // Apply Skip and Take pagination
-            selectedIndices = ApplyPagination(selectedIndices, plan);
+            // Pass flag indicating if Take was already applied during evaluation
+            selectedIndices = ApplyPagination(selectedIndices, plan, applyTakeBeforePredicates);
             
             var enumerable = CreateBatchedEnumerable(selectedIndices);
             return (TResult)enumerable;
@@ -463,7 +478,9 @@ public sealed class ArrowQueryProvider : IQueryProvider
              resultType.GetGenericTypeDefinition() == typeof(IQueryable<>)))
         {
             // Apply Skip and Take pagination
-            var paginatedIndices = ApplyPagination(matchingIndices, plan);
+            // For sparse path, if we limited collection with maxRowForSparse, Take is already applied
+            bool takeApplied = plan.PaginationBeforePredicates && plan.Take.HasValue && !plan.Skip.HasValue;
+            var paginatedIndices = ApplyPagination(matchingIndices, plan, takeApplied);
             var enumerable = CreateBatchedEnumerable(paginatedIndices);
             return (TResult)enumerable;
         }
@@ -524,20 +541,25 @@ public sealed class ArrowQueryProvider : IQueryProvider
     private TResult ExecuteShortCircuit<TResult>(QueryPlan plan, string operation)
     {
         var chunkSize = ParallelOptions?.ChunkSize ?? 16_384;
+        
+        // Calculate effective row count for Take-before-Where patterns
+        int? maxRowToEvaluate = plan.PaginationBeforePredicates && plan.Take.HasValue && !plan.Skip.HasValue
+            ? Math.Min(_count, plan.Take.Value)
+            : null;
 
         switch (operation)
         {
             case "Any":
                 // Any(): return true as soon as we find one match
                 var anyResult = StreamingPredicateEvaluator.Any(
-                    _recordBatch, plan.ColumnPredicates, _zoneMap, chunkSize);
+                    _recordBatch, plan.ColumnPredicates, _zoneMap, chunkSize, maxRowToEvaluate);
                 return (TResult)(object)anyResult;
 
             case "First":
             case "Single":
                 // First()/Single(): find first matching row
                 var firstIdx = StreamingPredicateEvaluator.FindFirst(
-                    _recordBatch, plan.ColumnPredicates, _zoneMap, chunkSize);
+                    _recordBatch, plan.ColumnPredicates, _zoneMap, chunkSize, maxRowToEvaluate);
                 if (firstIdx < 0)
                 {
                     throw new InvalidOperationException("Sequence contains no matching elements.");
@@ -548,7 +570,7 @@ public sealed class ArrowQueryProvider : IQueryProvider
             case "SingleOrDefault":
                 // FirstOrDefault(): find first matching row, or return default
                 var firstOrDefaultIdx = StreamingPredicateEvaluator.FindFirst(
-                    _recordBatch, plan.ColumnPredicates, _zoneMap, chunkSize);
+                    _recordBatch, plan.ColumnPredicates, _zoneMap, chunkSize, maxRowToEvaluate);
                 if (firstOrDefaultIdx < 0)
                 {
                     return default!;
@@ -887,11 +909,29 @@ public sealed class ArrowQueryProvider : IQueryProvider
     /// Applies Skip and Take pagination to a list of selected indices.
     /// Returns a new list with pagination applied, or the original list if no pagination is specified.
     /// </summary>
-    private static List<int> ApplyPagination(List<int> selectedIndices, QueryPlan plan)
+    /// <param name="alreadyApplied">True if pagination was already applied during evaluation (PaginationBeforePredicates)</param>
+    private static List<int> ApplyPagination(List<int> selectedIndices, QueryPlan plan, bool alreadyApplied = false)
     {
         if (!plan.Skip.HasValue && !plan.Take.HasValue)
         {
             // No pagination - return original list
+            return selectedIndices;
+        }
+        
+        // If pagination was already applied during predicate evaluation (Take before Where),
+        // don't apply it again during materialization
+        if (alreadyApplied && plan.PaginationBeforePredicates)
+        {
+            // For .Take(N).Where(...), the evaluation was already limited to first N rows
+            // The selectedIndices already represent the filtered results from those first N rows
+            // Skip is still applied here if present (Skip after Where)
+            if (plan.Skip.HasValue)
+            {
+                int skipCount = plan.Skip.Value;
+                if (skipCount >= selectedIndices.Count)
+                    return [];
+                return selectedIndices.Skip(skipCount).ToList();
+            }
             return selectedIndices;
         }
 
@@ -1299,8 +1339,9 @@ internal sealed class QueryExpressionAnalyzer(Dictionary<string, int> columnInde
                 if (node.Arguments[1] is ConstantExpression takeConst && takeConst.Value is int takeValue)
                 {
                     _take = takeValue;
-                    // If we HAVEN'T seen a predicate yet (Take is deeper, comes before predicates)
-                    if (!_seenPredicate)
+                    // If we HAVE seen a predicate (Where is on the outside, Take is inner/earlier)
+                    // then pagination comes BEFORE predicates logically: .Take(N).Where(...)
+                    if (_seenPredicate)
                     {
                         _paginationBeforePredicates = true;
                     }
@@ -1313,8 +1354,9 @@ internal sealed class QueryExpressionAnalyzer(Dictionary<string, int> columnInde
                 if (node.Arguments[1] is ConstantExpression skipConst && skipConst.Value is int skipValue)
                 {
                     _skip = skipValue;
-                    // If we HAVEN'T seen a predicate yet (Skip is deeper, comes before predicates)
-                    if (!_seenPredicate)
+                    // If we HAVE seen a predicate (Where is on the outside, Skip is inner/earlier)
+                    // then pagination comes BEFORE predicates logically: .Skip(N).Where(...)
+                    if (_seenPredicate)
                     {
                         _paginationBeforePredicates = true;
                     }

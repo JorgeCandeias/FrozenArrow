@@ -58,22 +58,24 @@ internal static class ParallelQueryExecutor
     /// <param name="predicates">The predicates to evaluate.</param>
     /// <param name="options">Parallel execution options.</param>
     /// <param name="zoneMap">Optional zone map for skip-scanning optimization.</param>
+    /// <param name="maxRowToEvaluate">Maximum row index to evaluate (for Take before Where). If null, evaluates all rows.</param>
     public static void EvaluatePredicatesParallel(
         RecordBatch batch,
         ref SelectionBitmap selection,
         IReadOnlyList<ColumnPredicate> predicates,
         ParallelQueryOptions? options = null,
-        ZoneMap? zoneMap = null)
+        ZoneMap? zoneMap = null,
+        int? maxRowToEvaluate = null)
     {
         options ??= ParallelQueryOptions.Default;
-        var rowCount = batch.Length;
+        var rowCount = maxRowToEvaluate ?? batch.Length;
 
         // Fall back to sequential for small datasets or when disabled
         if (!options.EnableParallelExecution || 
             rowCount < options.ParallelThreshold || 
             predicates.Count == 0)
         {
-            EvaluatePredicatesSequential(batch, ref selection, predicates, zoneMap);
+            EvaluatePredicatesSequential(batch, ref selection, predicates, zoneMap, maxRowToEvaluate);
             return;
         }
 
@@ -184,19 +186,24 @@ internal static class ParallelQueryExecutor
     /// Evaluates predicates sequentially (original behavior).
     /// Also applies predicate reordering for optimal evaluation order.
     /// </summary>
+    /// <param name="maxRowToEvaluate">Maximum row index to evaluate (for Take before Where). If null, evaluates all rows.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void EvaluatePredicatesSequential(
         RecordBatch batch,
         ref SelectionBitmap selection,
         IReadOnlyList<ColumnPredicate> predicates,
-        ZoneMap? zoneMap = null)
+        ZoneMap? zoneMap = null,
+        int? maxRowToEvaluate = null)
     {
+        var rowCount = maxRowToEvaluate ?? batch.Length;
+        
         // Reorder predicates by estimated selectivity (most selective first)
-        predicates = PredicateReorderer.ReorderBySelectivity(predicates, zoneMap, batch.Length);
+        predicates = PredicateReorderer.ReorderBySelectivity(predicates, zoneMap, rowCount);
         
         foreach (var predicate in predicates)
         {
-            predicate.Evaluate(batch, ref selection);
+            // Evaluate only up to maxRowToEvaluate
+            predicate.Evaluate(batch, ref selection, endIndex: rowCount);
         }
     }
 
