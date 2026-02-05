@@ -182,7 +182,9 @@ public class ZoneMapThreadSafetyTests
         var results = await Task.WhenAll(tasks);
 
         // Assert - All should agree
-        var expectedCount = rowCount - 100;
+        // Query is "Value > 100", so matches are: 101, 102, ..., 99999
+        // Count = 99999 - 101 + 1 = 99899 values
+        var expectedCount = rowCount - 101;
         Assert.All(results, count => Assert.Equal(expectedCount, count));
     }
 
