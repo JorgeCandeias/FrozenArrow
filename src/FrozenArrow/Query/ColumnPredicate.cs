@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
@@ -1034,6 +1035,15 @@ public sealed class StringEqualityPredicate : ColumnPredicate
     public override void Evaluate(RecordBatch batch, Span<bool> selection)
     {
         var column = batch.Column(ColumnIndex);
+
+        // Fast path for dictionary-encoded strings
+        if (column is DictionaryArray dictArray && dictArray.Dictionary is StringArray)
+        {
+            EvaluateDictionaryEncoded(dictArray, selection);
+            return;
+        }
+
+        // Standard path for primitive string arrays
         var length = batch.Length;
 
         for (int i = 0; i < length; i++)
@@ -1058,6 +1068,141 @@ public sealed class StringEqualityPredicate : ColumnPredicate
             var columnValue = RunLengthEncodedArrayBuilder.GetStringValue(column, i);
             var matches = string.Equals(columnValue, Value, Comparison);
             selection[i] = Negate ? !matches : matches;
+        }
+    }
+
+    /// <summary>
+    /// Optimized evaluation for dictionary-encoded string columns.
+    /// Evaluates the predicate once per unique dictionary entry (O(unique_values))
+    /// instead of once per row (O(rows)), then broadcasts results using index lookups.
+    /// </summary>
+    /// <remarks>
+    /// For a 1M row column with 100 unique values, this reduces string comparisons
+    /// from 1,000,000 to 100 - a 10,000x reduction in comparison operations.
+    /// </remarks>
+    private void EvaluateDictionaryEncoded(DictionaryArray dictArray, Span<bool> selection)
+    {
+        var dictionary = (StringArray)dictArray.Dictionary;
+        var indices = dictArray.Indices;
+        var dictionaryLength = dictionary.Length;
+
+        // Step 1: Evaluate predicate for each unique dictionary entry (O(unique_values))
+        // Use stackalloc for small dictionaries, ArrayPool for larger ones
+        bool[]? pooledArray = null;
+        Span<bool> dictionaryResults = dictionaryLength <= 1024
+            ? stackalloc bool[dictionaryLength]
+            : (pooledArray = ArrayPool<bool>.Shared.Rent(dictionaryLength)).AsSpan(0, dictionaryLength);
+
+        try
+        {
+            for (int dictIndex = 0; dictIndex < dictionaryLength; dictIndex++)
+            {
+                var dictValue = dictionary.GetString(dictIndex);
+                var matches = string.Equals(dictValue, Value, Comparison);
+                dictionaryResults[dictIndex] = Negate ? !matches : matches;
+            }
+
+            // Step 2: Broadcast results to rows based on their dictionary indices (O(rows))
+            // Optimized path: direct array access for common index types
+            int length = dictArray.Length;
+            
+            switch (indices)
+            {
+                case UInt8Array uint8Indices:
+                    EvaluateDictionaryEncodedUInt8(uint8Indices, dictionaryResults, selection, length, dictArray);
+                    break;
+                case UInt16Array uint16Indices:
+                    EvaluateDictionaryEncodedUInt16(uint16Indices, dictionaryResults, selection, length, dictArray);
+                    break;
+                case Int32Array int32Indices:
+                    EvaluateDictionaryEncodedInt32(int32Indices, dictionaryResults, selection, length, dictArray);
+                    break;
+                default:
+                    // Fallback for other index types
+                    for (int i = 0; i < length; i++)
+                    {
+                        if (!selection[i]) continue;
+
+                        if (dictArray.IsNull(i))
+                        {
+                            var result = Value is null;
+                            selection[i] = Negate ? !result : result;
+                        }
+                        else
+                        {
+                            var dictIndex = DictionaryArrayHelper.GetDictionaryIndex(indices, i);
+                            selection[i] = dictionaryResults[dictIndex];
+                        }
+                    }
+                    break;
+            }
+        }
+        finally
+        {
+            if (pooledArray != null)
+            {
+                ArrayPool<bool>.Shared.Return(pooledArray);
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EvaluateDictionaryEncodedUInt8(UInt8Array indices, Span<bool> dictionaryResults, Span<bool> selection, int length, DictionaryArray dictArray)
+    {
+        var indicesSpan = indices.Values;
+        for (int i = 0; i < length; i++)
+        {
+            if (!selection[i]) continue;
+
+            if (dictArray.IsNull(i))
+            {
+                var result = Value is null;
+                selection[i] = Negate ? !result : result;
+            }
+            else
+            {
+                selection[i] = dictionaryResults[indicesSpan[i]];
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EvaluateDictionaryEncodedUInt16(UInt16Array indices, Span<bool> dictionaryResults, Span<bool> selection, int length, DictionaryArray dictArray)
+    {
+        var indicesSpan = indices.Values;
+        for (int i = 0; i < length; i++)
+        {
+            if (!selection[i]) continue;
+
+            if (dictArray.IsNull(i))
+            {
+                var result = Value is null;
+                selection[i] = Negate ? !result : result;
+            }
+            else
+            {
+                selection[i] = dictionaryResults[indicesSpan[i]];
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EvaluateDictionaryEncodedInt32(Int32Array indices, Span<bool> dictionaryResults, Span<bool> selection, int length, DictionaryArray dictArray)
+    {
+        var indicesSpan = indices.Values;
+        for (int i = 0; i < length; i++)
+        {
+            if (!selection[i]) continue;
+
+            if (dictArray.IsNull(i))
+            {
+                var result = Value is null;
+                selection[i] = Negate ? !result : result;
+            }
+            else
+            {
+                selection[i] = dictionaryResults[indicesSpan[i]];
+            }
         }
     }
 
@@ -1098,6 +1243,15 @@ public sealed class StringOperationPredicate : ColumnPredicate
     public override void Evaluate(RecordBatch batch, Span<bool> selection)
     {
         var column = batch.Column(ColumnIndex);
+
+        // Fast path for dictionary-encoded strings
+        if (column is DictionaryArray dictArray && dictArray.Dictionary is StringArray)
+        {
+            EvaluateDictionaryEncoded(dictArray, selection);
+            return;
+        }
+
+        // Standard path for primitive string arrays
         var length = batch.Length;
 
         for (int i = 0; i < length; i++)
@@ -1123,6 +1277,106 @@ public sealed class StringOperationPredicate : ColumnPredicate
                 StringOperation.EndsWith => columnValue.EndsWith(Pattern, Comparison),
                 _ => false
             };
+        }
+    }
+
+    /// <summary>
+    /// Optimized evaluation for dictionary-encoded string columns.
+    /// Evaluates the predicate once per unique dictionary entry (O(unique_values))
+    /// instead of once per row (O(rows)), then broadcasts results using index lookups.
+    /// </summary>
+    private void EvaluateDictionaryEncoded(DictionaryArray dictArray, Span<bool> selection)
+    {
+        var dictionary = (StringArray)dictArray.Dictionary;
+        var indices = dictArray.Indices;
+        var dictionaryLength = dictionary.Length;
+
+        // Step 1: Evaluate predicate for each unique dictionary entry
+        bool[]? pooledArray = null;
+        Span<bool> dictionaryResults = dictionaryLength <= 1024
+            ? stackalloc bool[dictionaryLength]
+            : (pooledArray = ArrayPool<bool>.Shared.Rent(dictionaryLength)).AsSpan(0, dictionaryLength);
+
+        try
+        {
+            for (int dictIndex = 0; dictIndex < dictionaryLength; dictIndex++)
+            {
+                var dictValue = dictionary.GetString(dictIndex);
+                if (dictValue is null)
+                {
+                    dictionaryResults[dictIndex] = false;
+                    continue;
+                }
+
+                dictionaryResults[dictIndex] = Operation switch
+                {
+                    StringOperation.Contains => dictValue.Contains(Pattern, Comparison),
+                    StringOperation.StartsWith => dictValue.StartsWith(Pattern, Comparison),
+                    StringOperation.EndsWith => dictValue.EndsWith(Pattern, Comparison),
+                    _ => false
+                };
+            }
+
+            // Step 2: Broadcast results to rows - optimized with direct array access
+            int length = dictArray.Length;
+            
+            switch (indices)
+            {
+                case UInt8Array uint8Indices:
+                    {
+                        var indicesSpan = uint8Indices.Values;
+                        for (int i = 0; i < length; i++)
+                        {
+                            if (!selection[i]) continue;
+                            selection[i] = dictArray.IsNull(i) ? false : dictionaryResults[indicesSpan[i]];
+                        }
+                    }
+                    break;
+                case UInt16Array uint16Indices:
+                    {
+                        var indicesSpan = uint16Indices.Values;
+                        for (int i = 0; i < length; i++)
+                        {
+                            if (!selection[i]) continue;
+                            selection[i] = dictArray.IsNull(i) ? false : dictionaryResults[indicesSpan[i]];
+                        }
+                    }
+                    break;
+                case Int32Array int32Indices:
+                    {
+                        var indicesSpan = int32Indices.Values;
+                        for (int i = 0; i < length; i++)
+                        {
+                            if (!selection[i]) continue;
+                            selection[i] = dictArray.IsNull(i) ? false : dictionaryResults[indicesSpan[i]];
+                        }
+                    }
+                    break;
+                default:
+                    // Fallback
+                    for (int i = 0; i < length; i++)
+                    {
+                        if (!selection[i]) continue;
+
+                        if (dictArray.IsNull(i))
+                        {
+                            selection[i] = false;
+                        }
+                        else
+                        {
+                            var dictIndex = DictionaryArrayHelper.GetDictionaryIndex(indices, i);
+                            selection[i] = dictionaryResults[dictIndex];
+                        }
+                    }
+                    break;
+            }
+        }
+        finally
+        {
+            if (pooledArray != null)
+            {
+                ArrayPool<bool>.Shared.Return(pooledArray);
+            }
         }
     }
 
