@@ -559,7 +559,7 @@ internal static class FusedAggregator
             }
         }
 
-        return count > 0 ? (double)sum / count : 0;
+        return count > 0 ? (double)sum / count : throw new InvalidOperationException("Sequence contains no elements");
     }
 
     private static double FusedAverageInt64Sequential(
@@ -581,7 +581,7 @@ internal static class FusedAggregator
             }
         }
 
-        return count > 0 ? (double)sum / count : 0;
+        return count > 0 ? (double)sum / count : throw new InvalidOperationException("Sequence contains no elements");
     }
 
     private static double FusedAverageDoubleSequential(
@@ -603,7 +603,7 @@ internal static class FusedAggregator
             }
         }
 
-        return count > 0 ? sum / count : 0;
+        return count > 0 ? sum / count : throw new InvalidOperationException("Sequence contains no elements");
     }
 
     private static decimal FusedAverageDecimalSequential(
@@ -624,7 +624,7 @@ internal static class FusedAggregator
             }
         }
 
-        return count > 0 ? sum / count : 0;
+        return count > 0 ? sum / count : throw new InvalidOperationException("Sequence contains no elements");
     }
 
     private static object FusedAverageParallel(
@@ -1700,3 +1700,4 @@ internal static class FusedAggregator
 
     #endregion
 }
+

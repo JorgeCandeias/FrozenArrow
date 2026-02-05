@@ -34,7 +34,10 @@ public class EdgeCaseTests
         Assert.Throws<InvalidOperationException>(() => data.AsQueryable().First());
         Assert.Null(data.AsQueryable().FirstOrDefault());
         Assert.Equal(0, data.AsQueryable().Sum(x => x.Value));
-        Assert.Throws<InvalidOperationException>(() => data.AsQueryable().Average(x => x.Score));
+        
+        // Test Average on empty - should throw
+        var avgResult = Assert.Throws<InvalidOperationException>(() => data.AsQueryable().Average(x => x.Score));
+        Assert.Contains("no elements", avgResult.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

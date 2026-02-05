@@ -246,7 +246,7 @@ internal static class ParallelAggregator
             totalSum += partialSums[i];
             totalCount += partialCounts[i];
         }
-        return totalCount > 0 ? (double)totalSum / totalCount : 0;
+        return totalCount > 0 ? (double)totalSum / totalCount : throw new InvalidOperationException("Sequence contains no elements");
     }
 
     private static double AverageInt64Parallel(Int64Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
@@ -287,7 +287,7 @@ internal static class ParallelAggregator
             totalSum += partialSums[i];
             totalCount += partialCounts[i];
         }
-        return totalCount > 0 ? (double)totalSum / totalCount : 0;
+        return totalCount > 0 ? (double)totalSum / totalCount : throw new InvalidOperationException("Sequence contains no elements");
     }
 
     private static double AverageDoubleParallel(DoubleArray array, ref SelectionBitmap selection, ParallelQueryOptions? options)
@@ -327,7 +327,7 @@ internal static class ParallelAggregator
             totalSum += partialSums[i];
             totalCount += partialCounts[i];
         }
-        return totalCount > 0 ? totalSum / totalCount : 0;
+        return totalCount > 0 ? totalSum / totalCount : throw new InvalidOperationException("Sequence contains no elements");
     }
 
     private static decimal AverageDecimalParallel(Decimal128Array array, ref SelectionBitmap selection, ParallelQueryOptions? options)
@@ -367,7 +367,7 @@ internal static class ParallelAggregator
             totalSum += partialSums[i];
             totalCount += partialCounts[i];
         }
-        return totalCount > 0 ? totalSum / totalCount : 0;
+        return totalCount > 0 ? totalSum / totalCount : throw new InvalidOperationException("Sequence contains no elements");
     }
     
     /// <summary>
@@ -866,3 +866,4 @@ internal static class ParallelAggregator
 
     #endregion
 }
+

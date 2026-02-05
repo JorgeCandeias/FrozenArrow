@@ -102,7 +102,7 @@ internal static class ColumnAggregator
                 count++;
             }
         }
-        return count > 0 ? (double)sum / count : 0;
+        return count > 0 ? (double)sum / count : throw new InvalidOperationException("Sequence contains no elements");
     }
 
     public static double AverageInt64(Int64Array array, bool[] selection)
@@ -118,7 +118,7 @@ internal static class ColumnAggregator
                 count++;
             }
         }
-        return count > 0 ? (double)sum / count : 0;
+        return count > 0 ? (double)sum / count : throw new InvalidOperationException("Sequence contains no elements");
     }
 
     public static double AverageDouble(DoubleArray array, bool[] selection)
@@ -134,7 +134,7 @@ internal static class ColumnAggregator
                 count++;
             }
         }
-        return count > 0 ? sum / count : 0;
+        return count > 0 ? sum / count : throw new InvalidOperationException("Sequence contains no elements");
     }
 
     public static double AverageFloat(FloatArray array, bool[] selection)
@@ -150,7 +150,7 @@ internal static class ColumnAggregator
                 count++;
             }
         }
-        return count > 0 ? sum / count : 0;
+        return count > 0 ? sum / count : throw new InvalidOperationException("Sequence contains no elements");
     }
 
     public static decimal AverageDecimal(Decimal128Array array, bool[] selection)
@@ -165,7 +165,7 @@ internal static class ColumnAggregator
                 count++;
             }
         }
-        return count > 0 ? sum / count : 0;
+        return count > 0 ? sum / count : throw new InvalidOperationException("Sequence contains no elements");
     }
 
     #endregion
@@ -777,7 +777,7 @@ internal static class ColumnAggregator
                 count++;
             }
         }
-        return count > 0 ? (double)sum / count : 0;
+        return count > 0 ? (double)sum / count : throw new InvalidOperationException("Sequence contains no elements");
     }
 
     private static double AverageInt64(Int64Array array, ref SelectionBitmap selection)
@@ -793,7 +793,7 @@ internal static class ColumnAggregator
                 count++;
             }
         }
-        return count > 0 ? (double)sum / count : 0;
+        return count > 0 ? (double)sum / count : throw new InvalidOperationException("Sequence contains no elements");
     }
 
     private static double AverageDouble(DoubleArray array, ref SelectionBitmap selection)
@@ -809,7 +809,7 @@ internal static class ColumnAggregator
                 count++;
             }
         }
-        return count > 0 ? sum / count : 0;
+        return count > 0 ? sum / count : throw new InvalidOperationException("Sequence contains no elements");
     }
 
     private static double AverageFloat(FloatArray array, ref SelectionBitmap selection)
@@ -825,7 +825,7 @@ internal static class ColumnAggregator
                 count++;
             }
         }
-        return count > 0 ? sum / count : 0;
+        return count > 0 ? sum / count : throw new InvalidOperationException("Sequence contains no elements");
     }
 
     private static decimal AverageDecimal(Decimal128Array array, ref SelectionBitmap selection)
@@ -840,7 +840,7 @@ internal static class ColumnAggregator
                 count++;
             }
         }
-        return count > 0 ? sum / count : 0;
+        return count > 0 ? sum / count : throw new InvalidOperationException("Sequence contains no elements");
     }
 
     private static int MinInt32(Int32Array array, ref SelectionBitmap selection)
@@ -1089,7 +1089,7 @@ internal static class ColumnAggregator
                 count++;
             }
         }
-        return count > 0 ? sum / count : 0;
+        return count > 0 ? sum / count : throw new InvalidOperationException("Sequence contains no elements");
     }
 
     private static object MinDictionary(DictionaryArray dictArray, ref SelectionBitmap selection)
@@ -1178,3 +1178,4 @@ internal static class ColumnAggregator
 
     #endregion
 }
+
