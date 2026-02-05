@@ -77,19 +77,29 @@ public class EdgeCaseTests
 
         // Act
         var count = data.AsQueryable().Where(x => x.Value == extremeValue).Count();
-        var sum = data.AsQueryable().Where(x => x.Value == extremeValue).Sum(x => x.Value);
-
+        
         // Assert
-        Assert.Equal(2, count);
+        // When extremeValue is 0, all three records match (since record 1 also has Value=0)
+        int expectedCount = extremeValue == 0 ? 3 : 2;
+        Assert.Equal(expectedCount, count);
+        
         if (extremeValue == int.MaxValue)
         {
             // Can't sum two int.MaxValue without overflow, but should handle single value
             var single = data.AsQueryable().Where(x => x.Id == 0).Sum(x => x.Value);
             Assert.Equal(extremeValue, single);
         }
-        else if (extremeValue == 0)
+        else if (extremeValue == int.MinValue)
         {
-            Assert.Equal(0, sum);
+            // Similar issue with int.MinValue
+            var single = data.AsQueryable().Where(x => x.Id == 0).Sum(x => x.Value);
+            Assert.Equal(extremeValue, single);
+        }
+        else
+        {
+            // For other values, sum should work
+            var sum = data.AsQueryable().Where(x => x.Value == extremeValue).Sum(x => x.Value);
+            Assert.Equal(extremeValue * expectedCount, sum);
         }
     }
 
@@ -114,7 +124,9 @@ public class EdgeCaseTests
         var count = data.AsQueryable().Where(x => x.Score == extremeValue).Count();
 
         // Assert
-        Assert.Equal(2, count);
+        // When extremeValue is 0, all three records match (since record 1 also has Score=0.0)
+        int expectedCount = extremeValue == 0.0 ? 3 : 2;
+        Assert.Equal(expectedCount, count);
     }
 
     [Fact]
