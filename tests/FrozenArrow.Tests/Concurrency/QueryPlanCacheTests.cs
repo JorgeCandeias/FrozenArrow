@@ -217,6 +217,14 @@ public class QueryPlanCacheTests
         var timeout = Task.Delay(TimeSpan.FromSeconds(10));
         var completedTask = await Task.WhenAny(Task.WhenAll(warmupTasks), timeout);
 
+        // Check if any tasks faulted
+        var faultedTasks = warmupTasks.Where(t => t.IsFaulted).ToList();
+        if (faultedTasks.Any())
+        {
+            var exceptions = faultedTasks.Select(t => t.Exception?.InnerException?.Message ?? "Unknown").ToList();
+            Assert.Fail($"Tasks faulted: {string.Join(", ", exceptions)}");
+        }
+
         // Assert
         Assert.True(completedTask == Task.WhenAll(warmupTasks), "Cache warmup should not deadlock");
     }
