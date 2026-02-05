@@ -77,6 +77,26 @@ public sealed class QueryPlan
     public double EstimatedSelectivity { get; init; } = 1.0;
 
     /// <summary>
+    /// Gets the number of elements to skip (for pagination).
+    /// Null means no Skip operation.
+    /// </summary>
+    public int? Skip { get; init; }
+
+    /// <summary>
+    /// Gets the maximum number of elements to take (for pagination).
+    /// Null means no Take operation (return all results).
+    /// </summary>
+    public int? Take { get; init; }
+
+    /// <summary>
+    /// Gets whether Take/Skip operations appear before predicates in the query.
+    /// True: .Take(N).Where(...) - limit dataset first, then filter
+    /// False: .Where(...).Take(N) - filter first, then limit
+    /// This affects execution strategy for optimal performance.
+    /// </summary>
+    public bool PaginationBeforePredicates { get; init; }
+
+    /// <summary>
     /// Creates a string representation of the query plan for debugging.
     /// </summary>
     public override string ToString()
@@ -126,6 +146,16 @@ public sealed class QueryPlan
         {
             var colDisplay = ToDictionaryValueAggregation.ColumnName ?? "";
             lines.Add($"  ToDictionary: Key={GroupByColumn}, Value={ToDictionaryValueAggregation.Operation}({colDisplay})");
+        }
+
+        if (Skip.HasValue)
+        {
+            lines.Add($"  Skip: {Skip.Value}");
+        }
+
+        if (Take.HasValue)
+        {
+            lines.Add($"  Take: {Take.Value}");
         }
 
         lines.Add($"  Est. Selectivity: {EstimatedSelectivity:P0}");

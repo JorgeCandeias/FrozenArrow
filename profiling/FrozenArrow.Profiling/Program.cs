@@ -170,6 +170,7 @@ public static class Program
               pooled            Pooled materialization (ArrayPool, zero-alloc)
               shortcircuit      Any/First with early-exit optimization
               querycache        Query plan caching performance
+              pagination        Take/Skip pagination operations
               all               Run all scenarios
             
             Example: dotnet run -- -s filter -r 1000000 -i 10 -o json --save
@@ -202,6 +203,7 @@ public static class Program
             "pooled" => [new PooledMaterializationScenario()],
             "shortcircuit" => [new ShortCircuitScenario()],
             "querycache" => [new QueryPlanCacheScenario()],
+            "pagination" => [new PaginationScenario()],
             _ => throw new ArgumentException($"Unknown scenario: {scenario}")
         };
 
@@ -248,7 +250,8 @@ public static class Program
         new EnumerationScenario(),
         new PooledMaterializationScenario(),
         new ShortCircuitScenario(),
-        new QueryPlanCacheScenario()
+        new QueryPlanCacheScenario(),
+        new PaginationScenario()
     ];
 
     private static async Task<string> CompareWithBaselineAsync(List<ProfilingResult> current, string baselinePath)

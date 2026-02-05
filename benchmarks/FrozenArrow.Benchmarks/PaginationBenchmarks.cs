@@ -181,4 +181,61 @@ public class PaginationBenchmarks
     }
 
     #endregion
+
+    #region Take with Materialization (ToList)
+
+    [Benchmark]
+    [BenchmarkCategory("TakeMaterialize")]
+    public int List_TakeMaterialize()
+    {
+        return _list.Where(x => x.IsActive).Take(100).ToList().Count;
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("TakeMaterialize")]
+    public int FrozenArrow_TakeMaterialize()
+    {
+        return _frozenArrow.AsQueryable().Where(x => x.IsActive).Take(100).ToList().Count;
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("TakeMaterialize")]
+    public int DuckDB_TakeMaterialize()
+    {
+        using var cmd = _duckDbConnection.CreateCommand();
+        cmd.CommandText = "SELECT * FROM items WHERE IsActive = true LIMIT 100";
+        using var reader = cmd.ExecuteReader();
+        int count = 0;
+        while (reader.Read()) count++;
+        return count;
+    }
+
+    #endregion
+
+    #region Large Skip (Page Deep into Results)
+
+    [Benchmark]
+    [BenchmarkCategory("LargeSkip")]
+    public int List_LargeSkip()
+    {
+        return _list.Where(x => x.Age > 25).Skip(50000).Take(10).Count();
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("LargeSkip")]
+    public int FrozenArrow_LargeSkip()
+    {
+        return _frozenArrow.AsQueryable().Where(x => x.Age > 25).Skip(50000).Take(10).Count();
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("LargeSkip")]
+    public int DuckDB_LargeSkip()
+    {
+        using var cmd = _duckDbConnection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM (SELECT 1 FROM items WHERE Age > 25 LIMIT 10 OFFSET 50000)";
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    #endregion
 }
