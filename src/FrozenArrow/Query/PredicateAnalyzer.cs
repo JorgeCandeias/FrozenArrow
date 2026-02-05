@@ -11,37 +11,34 @@ public sealed class PredicateAnalyzer : ExpressionVisitor
 {
     private readonly List<ColumnPredicate> _predicates = [];
     private readonly List<string> _unsupportedReasons = [];
+    private readonly Dictionary<string, int> _columnIndexMap;
     private ParameterExpression? _parameter;
 
     public IReadOnlyList<ColumnPredicate> Predicates => _predicates;
     public IReadOnlyList<string> UnsupportedReasons => _unsupportedReasons;
     public bool HasUnsupportedPatterns => _unsupportedReasons.Count > 0;
 
+    private PredicateAnalyzer(Dictionary<string, int> columnIndexMap)
+    {
+        _columnIndexMap = columnIndexMap;
+    }
+
     /// <summary>
     /// Analyzes a predicate expression and extracts column-level predicates.
+    /// Predicates are created with their column indices immediately for thread-safety.
     /// </summary>
     public static PredicateAnalysisResult Analyze<T>(
         Expression<Func<T, bool>> predicate,
         Dictionary<string, int> columnIndexMap)
     {
-        var analyzer = new PredicateAnalyzer
+        var analyzer = new PredicateAnalyzer(columnIndexMap)
         {
             _parameter = predicate.Parameters[0]
         };
         analyzer.Visit(predicate.Body);
 
-        // Resolve column indices for extracted predicates
-        foreach (var pred in analyzer._predicates)
-        {
-            if (columnIndexMap.TryGetValue(pred.ColumnName, out var index))
-            {
-                pred.ColumnIndex = index;
-            }
-            else
-            {
-                analyzer._unsupportedReasons.Add($"Column '{pred.ColumnName}' not found in schema.");
-            }
-        }
+        // All predicates are now created with their column indices
+        // No post-processing mutation needed!
 
         return new PredicateAnalysisResult
         {
@@ -113,9 +110,10 @@ public sealed class PredicateAnalyzer : ExpressionVisitor
             // Check if it's negating a member access (bool property)
             if (node.Operand is MemberExpression memberExpr && 
                 memberExpr.Type == typeof(bool) &&
-                TryGetColumnName(memberExpr, out var columnName))
+                TryGetColumnName(memberExpr, out var columnName) &&
+                TryGetColumnIndex(columnName, out var columnIndex))
             {
-                _predicates.Add(new BooleanPredicate(columnName, expectedValue: false));
+                _predicates.Add(new BooleanPredicate(columnName, columnIndex, expectedValue: false));
                 return node;
             }
         }
@@ -128,13 +126,26 @@ public sealed class PredicateAnalyzer : ExpressionVisitor
         // Handle direct boolean property access (e.g., x => x.IsActive)
         if (node.Type == typeof(bool) && 
             node.Expression == _parameter &&
-            TryGetColumnName(node, out var columnName))
+            TryGetColumnName(node, out var columnName) &&
+            TryGetColumnIndex(columnName, out var columnIndex))
         {
-            _predicates.Add(new BooleanPredicate(columnName, expectedValue: true));
+            _predicates.Add(new BooleanPredicate(columnName, columnIndex, expectedValue: true));
             return node;
         }
 
         return base.VisitMember(node);
+    }
+
+    private bool TryGetColumnIndex(string columnName, out int columnIndex)
+    {
+        if (_columnIndexMap.TryGetValue(columnName, out columnIndex))
+        {
+            return true;
+        }
+
+        _unsupportedReasons.Add($"Column '{columnName}' not found in schema.");
+        columnIndex = -1;
+        return false;
     }
 
     private bool TryExtractComparison(BinaryExpression node, out ColumnPredicate? predicate)
@@ -158,7 +169,9 @@ public sealed class PredicateAnalyzer : ExpressionVisitor
             isReversed = true;
         }
 
-        if (memberExpr is null || !TryGetColumnName(memberExpr, out var columnName))
+        if (memberExpr is null || 
+            !TryGetColumnName(memberExpr, out var columnName) ||
+            !TryGetColumnIndex(columnName, out var columnIndex))
         {
             return false;
         }
@@ -169,16 +182,16 @@ public sealed class PredicateAnalyzer : ExpressionVisitor
             return false;
         }
 
-        // Create appropriate predicate based on type
+        // Create appropriate predicate based on type - WITH columnIndex for immutability!
         predicate = constantValue switch
         {
-            int intValue => new Int32ComparisonPredicate(columnName, op.Value, intValue),
-            double doubleValue => new DoubleComparisonPredicate(columnName, op.Value, doubleValue),
-            decimal decimalValue => new DecimalComparisonPredicate(columnName, op.Value, decimalValue),
-            string stringValue when op == ComparisonOperator.Equal => new StringEqualityPredicate(columnName, stringValue),
-            string stringValue when op == ComparisonOperator.NotEqual => new StringEqualityPredicate(columnName, stringValue, negate: true),
-            null when op == ComparisonOperator.Equal => new IsNullPredicate(columnName, checkForNull: true),
-            null when op == ComparisonOperator.NotEqual => new IsNullPredicate(columnName, checkForNull: false),
+            int intValue => new Int32ComparisonPredicate(columnName, columnIndex, op.Value, intValue),
+            double doubleValue => new DoubleComparisonPredicate(columnName, columnIndex, op.Value, doubleValue),
+            decimal decimalValue => new DecimalComparisonPredicate(columnName, columnIndex, op.Value, decimalValue),
+            string stringValue when op == ComparisonOperator.Equal => new StringEqualityPredicate(columnName, columnIndex, stringValue),
+            string stringValue when op == ComparisonOperator.NotEqual => new StringEqualityPredicate(columnName, columnIndex, stringValue, negate: true),
+            null when op == ComparisonOperator.Equal => new IsNullPredicate(columnName, columnIndex, checkForNull: true),
+            null when op == ComparisonOperator.NotEqual => new IsNullPredicate(columnName, columnIndex, checkForNull: false),
             _ => null
         };
 
@@ -193,6 +206,7 @@ public sealed class PredicateAnalyzer : ExpressionVisitor
         // Also handles char overloads: x.Property.Contains('a'), etc.
         if (node.Object is MemberExpression memberExpr && 
             TryGetColumnName(memberExpr, out var columnName) &&
+            TryGetColumnIndex(columnName, out var columnIndex) &&
             node.Arguments.Count >= 1 &&
             TryGetConstantValue(node.Arguments[0], out var patternObj))
         {
@@ -226,7 +240,7 @@ public sealed class PredicateAnalyzer : ExpressionVisitor
                         comparison = comp;
                     }
 
-                    predicate = new StringOperationPredicate(columnName, pattern, operation.Value, comparison);
+                    predicate = new StringOperationPredicate(columnName, columnIndex, pattern, operation.Value, comparison);
                     return true;
                 }
             }
@@ -256,6 +270,7 @@ public sealed class PredicateAnalyzer : ExpressionVisitor
         // Handle: x.Property.Equals("value") or x.Property.Equals(variable)
         if (node.Object is MemberExpression memberExpr &&
             TryGetColumnName(memberExpr, out var columnName) &&
+            TryGetColumnIndex(columnName, out var columnIndex) &&
             node.Arguments.Count >= 1 &&
             TryGetConstantValue(node.Arguments[0], out var value))
         {
@@ -268,7 +283,7 @@ public sealed class PredicateAnalyzer : ExpressionVisitor
                 {
                     comparison = comp;
                 }
-                predicate = new StringEqualityPredicate(columnName, stringValue, comparison: comparison);
+                predicate = new StringEqualityPredicate(columnName, columnIndex, stringValue, comparison: comparison);
                 return true;
             }
         }

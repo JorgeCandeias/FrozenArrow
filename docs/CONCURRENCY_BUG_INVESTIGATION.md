@@ -3,15 +3,18 @@
 ## Summary
 Intermittent concurrency bug where concurrent queries with different predicates sometimes return incorrect results.
 
+**UPDATE**: After making predicates fully immutable (ColumnIndex set at construction), the bug persists. This rules out ColumnIndex mutation as the root cause.
+
 ## What Works ?
 - ? Single-column records: 50K rows, 20 concurrent threads, different thresholds - **passes consistently**
 - ? Same predicate: 100 concurrent threads with same threshold - **passes consistently**
 - ? Multi-column records: 50K rows, 20 concurrent threads, different thresholds in `ConcurrencyDebugTest` - **passes consistently**
 
 ## What Fails ?
-- ? `QueryPlanCacheTests.DifferentQueries_ConcurrentExecution_ShouldCacheSeparately` - **fails intermittently**
+- ? `QueryPlanCacheTests.DifferentQueries_ConcurrentExecution_ShouldCacheSeparately` - **still fails intermittently**
   - Error: "Higher threshold 530 should have <= matches than 520. Got 24483 for 530 vs 23997 for 520"
   - Threshold 530 is getting ~500 extra matches (close to what threshold 510 or 500 would return)
+  - **Failure rate: ~90%** (18 failures out of 20 runs after immutability fix)
 
 ## Key Findings
 
@@ -21,38 +24,39 @@ Intermittent concurrency bug where concurrent queries with different predicates 
   - Cache is stored in `FrozenArrow<T>._queryPlanCache` (line 47 of FrozenArrow.cs)
 - **Cache Refactoring**: Moved from dual-dictionary to single-dictionary design
   - Old: `_cacheByHash` + `_cacheByKey` (race condition risk)
-  - New: Single `_cache` dictionary (thread-safe)
+  - New: Single `_cache` dictionary (thread-safe) ?
 
 ### 2. Query Plan Immutability
 - ? `QueryPlan`: All properties are `init`-only - **immutable**
 - ? `Int32ComparisonPredicate`: `Value` property is get-only - **immutable** once constructed
-- ?? `ColumnPredicate.ColumnIndex`: Has `internal set` - **mutable**!
-  - Set during analysis in `PredicateAnalyzer.Analyze()` line 38
-  - This is a potential race condition point
+- ? **ColumnPredicate.ColumnIndex**: NOW IMMUTABLE! ?
+  - **FIXED**: Changed from `{ get; internal set; }` to abstract `{ get; }` 
+  - Set at construction time, never mutated
+  - All 8 predicate types updated to accept columnIndex in constructor
+  - PredicateAnalyzer refactored to create predicates with columnIndex immediately
 
-### 3. Mysterious Behavior
-- Identical test code in `ConcurrencyDebugTest` passes reliably
-- Original test in `QueryPlanCacheTests` fails intermittently
-- **Hypothesis**: Something about test isolation, record type generation, or test execution order
+### 3. Immutability Refactoring Results
+- ? All tests still pass (465/466)
+- ? **Heisenbug persists!** Failure rate: ~90%
+- **Conclusion**: ColumnIndex mutation was NOT the root cause
+  - The bug is deeper than we thought
+  - Must be related to something else in query execution or data access
 
 ## Potential Root Causes
 
-### Theory 1: ColumnIndex Race Condition
-**Status**: Unlikely but possible
-- `ColumnPredicate.ColumnIndex` is mutable (`internal set`)
-- Set after predicate creation during query analysis
-- However, this happens during plan creation, and plans are cached
-
-**Investigation Needed**:
-- Check if predicates are somehow shared between query plans
-- Verify that each cached plan has its own predicate instances
-- Add logging to track ColumnIndex mutations
+### Theory 1: ColumnIndex Race Condition ~~(ELIMINATED)~~
+**Status**: ~~Unlikely but possible~~ **ELIMINATED ?**
+- ~~`ColumnPredicate.ColumnIndex` is mutable (`internal set`)~~
+- ~~Set after predicate creation during query analysis~~
+- **FIXED**: ColumnIndex is now immutable, set at construction
+- **Result**: Bug persists after fix - this was NOT the cause
 
 ### Theory 2: Record Type Generation Issue
-**Status**: Possible
+**Status**: Possible ??
 - Multiple tests define `CacheTestRecord`
 - Source generators might have subtle bugs with duplicate names
 - Generator errors encountered during test creation
+- **Evidence**: ConcurrencyDebugTest with different record name passes more reliably
 
 **Investigation Needed**:
 - Check generated code for `CacheTestRecord`

@@ -69,7 +69,7 @@ public class QueryPlanCacheTests
         Assert.All(results, count => Assert.Equal(firstResult, count));
     }
 
-    [Theory(Skip = "Intermittent concurrency bug - simplified test with same parameters passes, but this test fails intermittently. The bug appears to be related to multi-column records or column indexing. Needs further investigation.")]
+    [Theory(Skip = "Still flaky after immutability refactoring. The root cause is deeper - needs further investigation. See docs/CONCURRENCY_BUG_INVESTIGATION.md")]
     [InlineData(50_000, 20)]
     public async Task DifferentQueries_ConcurrentExecution_ShouldCacheSeparately(int rowCount, int queryVariations)
     {

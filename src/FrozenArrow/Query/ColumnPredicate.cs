@@ -18,8 +18,9 @@ public abstract class ColumnPredicate
 
     /// <summary>
     /// Gets the column index in the record batch.
+    /// This is immutable and set at construction time for thread-safety.
     /// </summary>
-    public int ColumnIndex { get; internal set; } = -1;
+    public abstract int ColumnIndex { get; }
 
     /// <summary>
     /// Evaluates this predicate against the column, updating the selection bitmap.
@@ -161,12 +162,14 @@ public enum ComparisonOperator
 public sealed class Int32ComparisonPredicate : ColumnPredicate
 {
     public override string ColumnName { get; }
+    public override int ColumnIndex { get; }
     public ComparisonOperator Operator { get; }
     public int Value { get; }
 
-    public Int32ComparisonPredicate(string columnName, ComparisonOperator op, int value)
+    public Int32ComparisonPredicate(string columnName, int columnIndex, ComparisonOperator op, int value)
     {
         ColumnName = columnName;
+        ColumnIndex = columnIndex;
         Operator = op;
         Value = value;
     }
@@ -550,12 +553,14 @@ public sealed class Int32ComparisonPredicate : ColumnPredicate
 public sealed class DoubleComparisonPredicate : ColumnPredicate
 {
     public override string ColumnName { get; }
+    public override int ColumnIndex { get; }
     public ComparisonOperator Operator { get; }
     public double Value { get; }
 
-    public DoubleComparisonPredicate(string columnName, ComparisonOperator op, double value)
+    public DoubleComparisonPredicate(string columnName, int columnIndex, ComparisonOperator op, double value)
     {
         ColumnName = columnName;
+        ColumnIndex = columnIndex;
         Operator = op;
         Value = value;
     }
@@ -921,12 +926,14 @@ public sealed class DoubleComparisonPredicate : ColumnPredicate
 public sealed class DecimalComparisonPredicate : ColumnPredicate
 {
     public override string ColumnName { get; }
+    public override int ColumnIndex { get; }
     public ComparisonOperator Operator { get; }
     public decimal Value { get; }
 
-    public DecimalComparisonPredicate(string columnName, ComparisonOperator op, decimal value)
+    public DecimalComparisonPredicate(string columnName, int columnIndex, ComparisonOperator op, decimal value)
     {
         ColumnName = columnName;
+        ColumnIndex = columnIndex;
         Operator = op;
         Value = value;
     }
@@ -1010,13 +1017,15 @@ public sealed class DecimalComparisonPredicate : ColumnPredicate
 public sealed class StringEqualityPredicate : ColumnPredicate
 {
     public override string ColumnName { get; }
+    public override int ColumnIndex { get; }
     public string? Value { get; }
     public bool Negate { get; }
     public StringComparison Comparison { get; }
 
-    public StringEqualityPredicate(string columnName, string? value, bool negate = false, StringComparison comparison = StringComparison.Ordinal)
+    public StringEqualityPredicate(string columnName, int columnIndex, string? value, bool negate = false, StringComparison comparison = StringComparison.Ordinal)
     {
         ColumnName = columnName;
+        ColumnIndex = columnIndex;
         Value = value;
         Negate = negate;
         Comparison = comparison;
@@ -1072,13 +1081,15 @@ public sealed class StringEqualityPredicate : ColumnPredicate
 public sealed class StringOperationPredicate : ColumnPredicate
 {
     public override string ColumnName { get; }
+    public override int ColumnIndex { get; }
     public string Pattern { get; }
     public StringOperation Operation { get; }
     public StringComparison Comparison { get; }
 
-    public StringOperationPredicate(string columnName, string pattern, StringOperation operation, StringComparison comparison = StringComparison.Ordinal)
+    public StringOperationPredicate(string columnName, int columnIndex, string pattern, StringOperation operation, StringComparison comparison = StringComparison.Ordinal)
     {
         ColumnName = columnName;
+        ColumnIndex = columnIndex;
         Pattern = pattern ?? throw new ArgumentNullException(nameof(pattern));
         Operation = operation;
         Comparison = comparison;
@@ -1146,11 +1157,13 @@ public enum StringOperation
 public sealed class BooleanPredicate : ColumnPredicate
 {
     public override string ColumnName { get; }
+    public override int ColumnIndex { get; }
     public bool ExpectedValue { get; }
 
-    public BooleanPredicate(string columnName, bool expectedValue = true)
+    public BooleanPredicate(string columnName, int columnIndex, bool expectedValue = true)
     {
         ColumnName = columnName;
+        ColumnIndex = columnIndex;
         ExpectedValue = expectedValue;
     }
 
@@ -1191,11 +1204,13 @@ public sealed class BooleanPredicate : ColumnPredicate
 public sealed class IsNullPredicate : ColumnPredicate
 {
     public override string ColumnName { get; }
+    public override int ColumnIndex { get; }
     public bool CheckForNull { get; }
 
-    public IsNullPredicate(string columnName, bool checkForNull = true)
+    public IsNullPredicate(string columnName, int columnIndex, bool checkForNull = true)
     {
         ColumnName = columnName;
+        ColumnIndex = columnIndex;
         CheckForNull = checkForNull;
     }
 
@@ -1226,6 +1241,11 @@ public sealed class IsNullPredicate : ColumnPredicate
 public sealed class AndPredicate : ColumnPredicate
 {
     public override string ColumnName => string.Join(" AND ", _predicates.Select(p => p.ColumnName));
+    
+    /// <summary>
+    /// AndPredicate doesn't operate on a single column, so ColumnIndex is not applicable.
+    /// </summary>
+    public override int ColumnIndex => -1;
     
     private readonly List<ColumnPredicate> _predicates;
 
