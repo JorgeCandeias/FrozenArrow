@@ -265,48 +265,74 @@ public sealed class ArrowQueryProvider : IQueryProvider
         var isCountQuery = resultType == typeof(int) || resultType == typeof(long);
         if (plan.EstimatedSelectivity < 0.05 && plan.ColumnPredicates.Count > 0 && !isCountQuery)
         {
-            // Calculate effective row count for Take-before-Where patterns
-            int? maxRowForSparse = plan.PaginationBeforePredicates && plan.Take.HasValue && !plan.Skip.HasValue
-                ? Math.Min(_count, plan.Take.Value)
-                : null;
+            // Calculate effective row range for pagination-before-predicates patterns
+            int sparseStartRow = 0;
+            int? sparseEndRow = null;
+            if (plan.PaginationBeforePredicates && plan.ColumnPredicates.Count > 0)
+            {
+                sparseStartRow = plan.Skip ?? 0;
+                sparseEndRow = _count;
+                if (plan.Take.HasValue)
+                {
+                    sparseEndRow = Math.Min(_count, sparseStartRow + plan.Take.Value);
+                }
+            }
             
             var matchingIndices = SparseIndexCollector.CollectMatchingIndices(
                 _recordBatch,
                 plan.ColumnPredicates,
                 _zoneMap,
                 ParallelOptions,
-                maxRowForSparse);
+                sparseEndRow,
+                sparseStartRow);
             
             return ExecuteWithSparseIndices<TResult>(plan, matchingIndices, resultType);
         }
 
         // DENSE PATH: Build selection bitmap using pooled bitfield (8x more memory efficient than bool[])
-        // Determine if we should apply Take before predicates
-        // This happens when: Take is present, no Skip, has predicates, AND pagination comes before predicates
-        bool applyTakeBeforePredicates = plan.Take.HasValue && !plan.Skip.HasValue && 
-                                         plan.ColumnPredicates.Count > 0 && plan.PaginationBeforePredicates;
         
-        // Calculate effective row count to evaluate
-        // When Take comes before predicates (.Take(N).Where(...)), we only need to evaluate first N rows
-        int? maxRowToEvaluate = applyTakeBeforePredicates && plan.Take.HasValue 
-            ? Math.Min(_count, plan.Take.Value) 
-            : null;
+        // Determine if we should apply pagination before predicates
+        // This happens when: Skip/Take is present, has predicates, AND pagination comes before predicates
+        bool applyPaginationBeforePredicates = plan.ColumnPredicates.Count > 0 && plan.PaginationBeforePredicates;
+        bool hasSkipBeforePredicates = applyPaginationBeforePredicates && plan.Skip.HasValue;
+        bool hasTakeBeforePredicates = applyPaginationBeforePredicates && plan.Take.HasValue;
         
-        // Initialize bitmap: if Take comes before predicates, only set first N bits to true, rest are false
-        using var selection = SelectionBitmap.Create(_count, initialValue: !applyTakeBeforePredicates);
+        // Calculate effective row range to evaluate
+        int startRow = hasSkipBeforePredicates ? Math.Min(_count, plan.Skip!.Value) : 0;
+        int endRow = _count;
         
-        if (applyTakeBeforePredicates && maxRowToEvaluate.HasValue)
+        if (hasTakeBeforePredicates)
         {
-            // For .Take(N).Where(...), set first N bits to true
-            // Predicates will then clear bits that don't match
-            for (int i = 0; i < maxRowToEvaluate.Value; i++)
+            // .Take(N).Where(...) or .Skip(M).Take(N).Where(...)
+            // Only evaluate rows from startRow to startRow + Take
+            endRow = Math.Min(_count, startRow + plan.Take!.Value);
+        }
+        
+        // Initialize bitmap: if pagination comes before predicates, only set affected range to true
+        using var selection = SelectionBitmap.Create(_count, initialValue: false);
+        
+        if (applyPaginationBeforePredicates)
+        {
+            // For .Skip().Where() or .Take().Where() or .Skip().Take().Where()
+            // Set only the relevant range of bits to true
+            for (int i = startRow; i < endRow; i++)
+            {
+                selection.Set(i);
+            }
+        }
+        else
+        {
+            // Normal case: set all bits to true
+            for (int i = 0; i < _count; i++)
             {
                 selection.Set(i);
             }
         }
 
         // Apply column predicates using parallel execution when beneficial
-        // Pass maxRowToEvaluate to limit evaluation range for Take-before-Where patterns
+        // Pass row range to limit evaluation for pagination-before-predicates patterns
+        int? maxRowToEvaluate = applyPaginationBeforePredicates ? (int?)endRow : null;
+        
         if (plan.ColumnPredicates.Count > 0)
         {
             ParallelQueryExecutor.EvaluatePredicatesParallel(
@@ -346,8 +372,8 @@ public sealed class ArrowQueryProvider : IQueryProvider
             }
             
             // Apply Skip and Take pagination
-            // Pass flag indicating if Take was already applied during evaluation
-            selectedIndices = ApplyPagination(selectedIndices, plan, applyTakeBeforePredicates);
+            // Pass flag indicating if pagination was already applied during evaluation
+            selectedIndices = ApplyPagination(selectedIndices, plan, applyPaginationBeforePredicates);
             
             var enumerable = CreateBatchedEnumerable(selectedIndices);
             return (TResult)enumerable;
@@ -478,9 +504,9 @@ public sealed class ArrowQueryProvider : IQueryProvider
              resultType.GetGenericTypeDefinition() == typeof(IQueryable<>)))
         {
             // Apply Skip and Take pagination
-            // For sparse path, if we limited collection with maxRowForSparse, Take is already applied
-            bool takeApplied = plan.PaginationBeforePredicates && plan.Take.HasValue && !plan.Skip.HasValue;
-            var paginatedIndices = ApplyPagination(matchingIndices, plan, takeApplied);
+            // For sparse path, if we limited collection with row range, pagination is already applied
+            bool paginationApplied = plan.PaginationBeforePredicates && plan.ColumnPredicates.Count > 0;
+            var paginatedIndices = ApplyPagination(matchingIndices, plan, paginationApplied);
             var enumerable = CreateBatchedEnumerable(paginatedIndices);
             return (TResult)enumerable;
         }
@@ -542,10 +568,18 @@ public sealed class ArrowQueryProvider : IQueryProvider
     {
         var chunkSize = ParallelOptions?.ChunkSize ?? 16_384;
         
-        // Calculate effective row count for Take-before-Where patterns
-        int? maxRowToEvaluate = plan.PaginationBeforePredicates && plan.Take.HasValue && !plan.Skip.HasValue
-            ? Math.Min(_count, plan.Take.Value)
-            : null;
+        // Calculate effective row range for pagination-before-predicates patterns
+        int? maxRowToEvaluate = null;
+        if (plan.PaginationBeforePredicates && plan.ColumnPredicates.Count > 0)
+        {
+            int startRow = plan.Skip ?? 0;
+            int endRow = _count;
+            if (plan.Take.HasValue)
+            {
+                endRow = Math.Min(_count, startRow + plan.Take.Value);
+            }
+            maxRowToEvaluate = endRow;
+        }
 
         switch (operation)
         {
@@ -918,20 +952,14 @@ public sealed class ArrowQueryProvider : IQueryProvider
             return selectedIndices;
         }
         
-        // If pagination was already applied during predicate evaluation (Take before Where),
+        // If pagination was already applied during predicate evaluation,
         // don't apply it again during materialization
         if (alreadyApplied && plan.PaginationBeforePredicates)
         {
-            // For .Take(N).Where(...), the evaluation was already limited to first N rows
-            // The selectedIndices already represent the filtered results from those first N rows
-            // Skip is still applied here if present (Skip after Where)
-            if (plan.Skip.HasValue)
-            {
-                int skipCount = plan.Skip.Value;
-                if (skipCount >= selectedIndices.Count)
-                    return [];
-                return selectedIndices.Skip(skipCount).ToList();
-            }
+            // For .Take(N).Where(...) or .Skip(M).Where(...) or .Skip(M).Take(N).Where(...)
+            // The evaluation was already limited to the specified row range
+            // The selectedIndices already represent the filtered results from that range
+            // No further pagination needed
             return selectedIndices;
         }
 

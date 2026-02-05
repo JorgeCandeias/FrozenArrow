@@ -27,14 +27,16 @@ internal static class SparseIndexCollector
     /// <param name="predicates">The predicates to evaluate.</param>
     /// <param name="zoneMap">Optional zone map for skip-scanning.</param>
     /// <param name="options">Parallel execution options.</param>
-    /// <param name="maxRowToEvaluate">Maximum row index to evaluate (for Take before Where). If null, evaluates all rows.</param>
+    /// <param name="maxRowToEvaluate">Maximum row index to evaluate (exclusive). If null, evaluates all rows.</param>
+    /// <param name="minRowToEvaluate">Minimum row index to evaluate (inclusive). Default is 0.</param>
     /// <returns>List of row indices that match all predicates.</returns>
     public static List<int> CollectMatchingIndices(
         RecordBatch batch,
         IReadOnlyList<ColumnPredicate> predicates,
         ZoneMap? zoneMap = null,
         ParallelQueryOptions? options = null,
-        int? maxRowToEvaluate = null)
+        int? maxRowToEvaluate = null,
+        int minRowToEvaluate = 0)
     {
         options ??= ParallelQueryOptions.Default;
         var rowCount = maxRowToEvaluate ?? batch.Length;
@@ -66,12 +68,12 @@ internal static class SparseIndexCollector
         // Sequential collection for small datasets
         if (rowCount < options.ParallelThreshold || !options.EnableParallelExecution)
         {
-            CollectSequential(predicates, columns, zoneMapData, zoneMap, 0, rowCount, result);
+            CollectSequential(predicates, columns, zoneMapData, zoneMap, minRowToEvaluate, rowCount, result);
             return result;
         }
         
         // Parallel collection for large datasets
-        return CollectParallel(predicates, columns, zoneMapData, zoneMap, rowCount, options);
+        return CollectParallel(predicates, columns, zoneMapData, zoneMap, minRowToEvaluate, rowCount, options);
     }
     
     /// <summary>
@@ -119,10 +121,12 @@ internal static class SparseIndexCollector
         IArrowArray[] columns,
         ColumnZoneMapData?[] zoneMapData,
         ZoneMap? zoneMap,
-        int rowCount,
+        int startRow,
+        int endRow,
         ParallelQueryOptions options)
     {
         var chunkSize = options.ChunkSize;
+        var rowCount = endRow - startRow;
         var chunkCount = (rowCount + chunkSize - 1) / chunkSize;
         
         var parallelOptions = new ParallelOptions();
@@ -136,8 +140,8 @@ internal static class SparseIndexCollector
         
         Parallel.For(0, chunkCount, parallelOptions, () => new List<int>(1000), (chunkIndex, state, threadList) =>
         {
-            int startRow = chunkIndex * chunkSize;
-            int endRow = Math.Min(startRow + chunkSize, rowCount);
+            int chunkStart = startRow + chunkIndex * chunkSize;
+            int chunkEnd = Math.Min(chunkStart + chunkSize, endRow);
             
             // Zone map skip
             if (CanSkipChunk(predicates, zoneMapData, chunkIndex))
@@ -146,7 +150,7 @@ internal static class SparseIndexCollector
             }
             
             // Evaluate rows in this chunk
-            for (int row = startRow; row < endRow; row++)
+            for (int row = chunkStart; row < chunkEnd; row++)
             {
                 if (EvaluateAllPredicates(predicates, columns, row))
                 {
