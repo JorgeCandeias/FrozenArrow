@@ -143,7 +143,7 @@ public class GroupByIntegrationTests
         Assert.Equal(90, categoryB.TotalQty); // 25 + 30 + 35
     }
 
-    [Fact(Skip = "Filter + GroupBy combination needs additional work - filter not applied correctly")]
+    [Fact]
     public void GroupBy_WithFilter_ProducesCorrectResults()
     {
         // Arrange

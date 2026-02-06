@@ -114,7 +114,53 @@ public sealed partial class ArrowQueryProvider
                     break;
 
                 case AggregatePlan aggregate:
-                    // Create a simple aggregate QueryPlan
+                    // Continue walking the input to collect predicates, pagination, etc.
+                    current = aggregate.Input;
+                    
+                    // Finish walking the tree to collect all predicates
+                    while (current is not null)
+                    {
+                        switch (current)
+                        {
+                            case ScanPlan:
+                                current = null;
+                                break;
+                                
+                            case FilterPlan filter:
+                                predicates.AddRange(filter.Predicates);
+                                selectivity = filter.EstimatedSelectivity;
+                                seenFilter = true;
+                                current = filter.Input;
+                                break;
+                                
+                            case LimitPlan limit:
+                                if (!seenFilter)
+                                {
+                                    paginationBeforePredicates = true;
+                                }
+                                take = limit.Count;
+                                current = limit.Input;
+                                break;
+                                
+                            case OffsetPlan offset:
+                                if (!seenFilter)
+                                {
+                                    paginationBeforePredicates = true;
+                                }
+                                skip = offset.Count;
+                                current = offset.Input;
+                                break;
+                                
+                            case ProjectPlan project:
+                                current = project.Input;
+                                break;
+                                
+                            default:
+                                throw new NotSupportedException($"Unexpected plan node '{current.GetType().Name}' below Aggregate");
+                        }
+                    }
+                    
+                    // Create a simple aggregate QueryPlan with all collected predicates
                     // Note: Count doesn't need a column, but other aggregates do
                     return new QueryPlan
                     {
@@ -135,7 +181,56 @@ public sealed partial class ArrowQueryProvider
                     };
 
                 case GroupByPlan groupBy:
-                    // Create a grouped query QueryPlan
+                    // Continue walking the input to collect predicates, pagination, etc.
+                    // GroupBy can have filters/pagination below it
+                    current = groupBy.Input;
+                    
+                    // After collecting everything, create the grouped query QueryPlan
+                    // We need to finish walking the tree first
+                    while (current is not null)
+                    {
+                        switch (current)
+                        {
+                            case ScanPlan:
+                                current = null;
+                                break;
+                                
+                            case FilterPlan filter:
+                                predicates.AddRange(filter.Predicates);
+                                selectivity = filter.EstimatedSelectivity;
+                                seenFilter = true;
+                                current = filter.Input;
+                                break;
+                                
+                            case LimitPlan limit:
+                                if (!seenFilter)
+                                {
+                                    paginationBeforePredicates = true;
+                                }
+                                take = limit.Count;
+                                current = limit.Input;
+                                break;
+                                
+                            case OffsetPlan offset:
+                                if (!seenFilter)
+                                {
+                                    paginationBeforePredicates = true;
+                                }
+                                skip = offset.Count;
+                                current = offset.Input;
+                                break;
+                                
+                            case ProjectPlan project:
+                                // Projections are handled during materialization
+                                current = project.Input;
+                                break;
+                                
+                            default:
+                                throw new NotSupportedException($"Unexpected plan node '{current.GetType().Name}' below GroupBy");
+                        }
+                    }
+                    
+                    // Now return the grouped query with all collected predicates
                     return new QueryPlan
                     {
                         IsFullyOptimized = true,
