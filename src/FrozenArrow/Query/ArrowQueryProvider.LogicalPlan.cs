@@ -42,8 +42,13 @@ public sealed partial class ArrowQueryProvider
         var optimizer = new LogicalPlanOptimizer(_zoneMap);
         var optimizedPlan = optimizer.Optimize(logicalPlan);
 
-        // Step 4: Execute - choose between direct execution or bridge
-        if (UseDirectLogicalPlanExecution)
+        // Step 4: Execute - choose between physical plans, direct execution, or bridge
+        if (UsePhysicalPlanExecution)
+        {
+            // Phase 6: Physical plan execution with cost-based strategies
+            return ExecuteLogicalPlanViaPhysical<TResult>(optimizedPlan);
+        }
+        else if (UseDirectLogicalPlanExecution)
         {
             // Phase 5: Direct execution without bridge
             return ExecuteLogicalPlanDirect<TResult>(optimizedPlan);
@@ -52,6 +57,37 @@ public sealed partial class ArrowQueryProvider
         {
             // Phase 3-4: Bridge to existing execution (maintain compatibility)
             return ExecuteLogicalPlanViaBridge<TResult>(optimizedPlan, expression);
+        }
+    }
+
+    /// <summary>
+    /// Executes a logical plan via physical plan execution (Phase 6).
+    /// Converts logical plan to physical plan with cost-based strategy selection,
+    /// then executes with the physical executor.
+    /// </summary>
+    private TResult ExecuteLogicalPlanViaPhysical<TResult>(LogicalPlanNode logicalPlan)
+    {
+        try
+        {
+            // Convert logical plan to physical plan
+            var planner = new PhysicalPlan.PhysicalPlanner();
+            var physicalPlan = planner.CreatePhysicalPlan(logicalPlan);
+
+            // Execute physical plan
+            var executor = new PhysicalPlan.PhysicalPlanExecutor(
+                _recordBatch,
+                _count,
+                _columnIndexMap,
+                _createItem,
+                _zoneMap,
+                ParallelOptions);
+
+            return executor.Execute<TResult>(physicalPlan);
+        }
+        catch (Exception)
+        {
+            // Fall back to direct logical plan execution on any error
+            return ExecuteLogicalPlanDirect<TResult>(logicalPlan);
         }
     }
 

@@ -210,6 +210,14 @@ public sealed partial class ArrowQueryProvider : IQueryProvider
     /// </summary>
     public bool UseDirectLogicalPlanExecution { get; set; } = false;
 
+    /// <summary>
+    /// Gets or sets whether to use physical plan execution (Phase 6).
+    /// When true, logical plans are converted to physical plans with strategy selection,
+    /// then executed with the physical executor.
+    /// Only applies when UseLogicalPlanExecution is true.
+    /// </summary>
+    public bool UsePhysicalPlanExecution { get; set; } = false;
+
     public TResult Execute<TResult>(Expression expression)
     {
         // NEW PATH: Try logical plan execution if enabled
