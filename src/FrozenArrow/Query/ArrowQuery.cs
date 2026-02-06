@@ -379,7 +379,15 @@ public sealed class ArrowQueryProvider : IQueryProvider
         // Example: .Where(x => x.IsActive).Skip(1000).Take(100).ToList()
         //   - Without optimization: evaluate all ~700K matches, build 125KB bitmap, then skip/take
         //   - With optimization: stop after finding 1100 matches (10-50x faster for pagination)
-        bool isPaginatedEnumeration = !plan.PaginationBeforePredicates && 
+        //
+        // IMPORTANT: This optimization is ONLY safe when there's no OrderBy/GroupBy/etc. between
+        // the Where and Take. Early termination assumes we can stop collecting after N matches,
+        // but OrderBy changes which rows are in the "first N" after sorting.
+        //
+        // We detect this by checking IsFullyOptimized - if the query has unsupported operations
+        // like OrderBy, it won't be fully optimized and we skip this optimization.
+        bool isPaginatedEnumeration = plan.IsFullyOptimized &&  // ? Must be fully optimized (no OrderBy, etc.)
+                                      !plan.PaginationBeforePredicates && 
                                       plan.Take.HasValue && 
                                       plan.ColumnPredicates.Count > 0 &&
                                       (resultType.IsGenericType && 

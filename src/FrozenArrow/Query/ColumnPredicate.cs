@@ -1428,6 +1428,7 @@ public sealed class BooleanPredicate : ColumnPredicate
 
         if (column is Apache.Arrow.BooleanArray boolArray)
         {
+            // Per-element null check (legacy path)
             for (int i = 0; i < length; i++)
             {
                 if (!selection[i]) continue;
@@ -1441,6 +1442,122 @@ public sealed class BooleanPredicate : ColumnPredicate
                 var value = boolArray.GetValue(i);
                 selection[i] = value == ExpectedValue;
             }
+        }
+    }
+
+    /// <summary>
+    /// SIMD-optimized evaluation for SelectionBitmap with bulk null filtering.
+    /// </summary>
+    public override void Evaluate(RecordBatch batch, ref SelectionBitmap selection, int? endIndex = null)
+    {
+        var column = batch.Column(ColumnIndex);
+        var actualEndIndex = endIndex ?? batch.Length;
+        
+        if (column is Apache.Arrow.BooleanArray boolArray)
+        {
+            EvaluateBooleanArrayWithNullFiltering(boolArray, ref selection, 0, actualEndIndex);
+        }
+        else
+        {
+            // Fallback to base implementation
+            base.Evaluate(batch, ref selection, endIndex);
+        }
+    }
+
+    private void EvaluateBooleanArrayWithNullFiltering(Apache.Arrow.BooleanArray boolArray, ref SelectionBitmap selection, int startIndex, int endIndex)
+    {
+        var length = endIndex - startIndex;
+        var hasNulls = boolArray.NullCount > 0;
+        var nullBitmap = boolArray.NullBitmapBuffer.Span;
+        var valueBitmap = boolArray.ValueBuffer.Span;
+
+        // OPTIMIZATION: Filter out nulls in bulk BEFORE value evaluation
+        // This eliminates per-element null checks in the loops below
+        if (hasNulls && !nullBitmap.IsEmpty)
+        {
+            selection.AndWithArrowNullBitmap(nullBitmap);
+        }
+
+        // Now filter by ExpectedValue
+        // Arrow BooleanArray uses a bitmap for values: 1 = true, 0 = false
+        // We need to AND the selection with either the value bitmap (ExpectedValue=true)
+        // or its complement (ExpectedValue=false)
+        if (!valueBitmap.IsEmpty)
+        {
+            if (ExpectedValue)
+            {
+                // Keep only rows where value is true
+                selection.AndWithArrowNullBitmap(valueBitmap);
+            }
+            else
+            {
+                // Keep only rows where value is false
+                // This requires ANDing with the complement of the value bitmap
+                AndWithArrowBitmapComplement(ref selection, valueBitmap, length);
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void AndWithArrowBitmapComplement(ref SelectionBitmap selection, ReadOnlySpan<byte> arrowBitmap, int length)
+    {
+        // AND the selection bitmap with the complement of the Arrow bitmap
+        // This is equivalent to keeping only rows where the Arrow bit is 0 (false)
+        
+        int blockIndex = 0;
+        int byteIndex = 0;
+        
+        // Process in 64-bit blocks (8 bytes from Arrow bitmap = 1 ulong block)
+        while (blockIndex < selection.BlockCount && byteIndex + 7 < arrowBitmap.Length)
+        {
+            // Read 8 bytes from Arrow bitmap and combine into ulong
+            ulong bitmap = arrowBitmap[byteIndex]
+                | ((ulong)arrowBitmap[byteIndex + 1] << 8)
+                | ((ulong)arrowBitmap[byteIndex + 2] << 16)
+                | ((ulong)arrowBitmap[byteIndex + 3] << 24)
+                | ((ulong)arrowBitmap[byteIndex + 4] << 32)
+                | ((ulong)arrowBitmap[byteIndex + 5] << 40)
+                | ((ulong)arrowBitmap[byteIndex + 6] << 48)
+                | ((ulong)arrowBitmap[byteIndex + 7] << 56);
+
+            // Complement the bitmap (keep rows where bit is 0)
+            ulong complementBitmap = ~bitmap;
+            
+            selection.AndBlock(blockIndex, complementBitmap);
+            
+            byteIndex += 8;
+            blockIndex++;
+        }
+
+        // Handle tail bytes
+        if (blockIndex < selection.BlockCount && byteIndex < arrowBitmap.Length)
+        {
+            ulong bitmap = 0;
+            int remainingBytes = Math.Min(arrowBitmap.Length - byteIndex, 8);
+            
+            for (int i = 0; i < remainingBytes; i++)
+            {
+                bitmap |= (ulong)arrowBitmap[byteIndex + i] << (i * 8);
+            }
+            
+            // Fill remaining bits with 0s (will become 1s after complement = keep those rows)
+            int remainingBits = length - (blockIndex * 64);
+            if (remainingBits < 64)
+            {
+                ulong validMask = (1UL << remainingBits) - 1;
+                bitmap &= validMask; // Zero out bits beyond length
+            }
+            
+            ulong complementBitmap = ~bitmap;
+            
+            // For tail, we need to preserve bits beyond our length
+            if (remainingBits < 64)
+            {
+                ulong validMask = (1UL << remainingBits) - 1;
+                complementBitmap = (complementBitmap & validMask) | ~validMask;
+            }
+            
+            selection.AndBlock(blockIndex, complementBitmap);
         }
     }
 

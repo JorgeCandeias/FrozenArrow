@@ -270,6 +270,20 @@ public struct SelectionBitmap : IDisposable
     }
 
     /// <summary>
+    /// Performs a bitwise AND on a specific block with the given value.
+    /// </summary>
+    /// <param name="blockIndex">The index of the 64-bit block to AND.</param>
+    /// <param name="value">The value to AND with the block.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void AndBlock(int blockIndex, ulong value)
+    {
+        if (blockIndex < 0 || blockIndex >= _blockCount)
+            throw new ArgumentOutOfRangeException(nameof(blockIndex));
+
+        _buffer![blockIndex] &= value;
+    }
+
+    /// <summary>
     /// Performs a bitwise AND with an Arrow null bitmap, modifying this selection bitmap in place.
     /// Arrow null bitmap format: 1 = valid (non-null), 0 = null.
     /// This method filters out null values from the selection in a single bulk pass.

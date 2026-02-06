@@ -30,6 +30,7 @@
 | [16](16-hardware-prefetch-hints.md) | **Hardware Prefetch Hints** | ? Complete | **0-10% large datasets** | CPU/Cache |
 | [17](17-lazy-bitmap-materialization.md) | **Lazy Bitmap Materialization** | ? Complete | **Theoretical 2-5× sparse** | Algorithm/Memory |
 | [18](18-pagination-skip-take-early-termination.md) | **Pagination Skip/Take Early Termination** | ? Complete | **2× pagination queries** | Algorithm |
+| [19](19-null-bitmap-batch-processing.md) | **Null Bitmap Batch Processing (Boolean)** | ? Complete | **5-10% nullable columns** | Algorithm/Memory |
 
 ---
 

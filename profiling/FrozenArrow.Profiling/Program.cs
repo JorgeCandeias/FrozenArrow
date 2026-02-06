@@ -161,7 +161,7 @@ public static class Program
               filter            Filter operations with varying selectivity
               aggregate         Sum, Average, Min, Max aggregations
               sparseagg         Aggregation with sparse selections (1%, 10%, 50%)
-              groupby           GroupBy with aggregations
+              groupby           WorkBy with aggregations
               fused             Fused filter+aggregate (single-pass)
               parallel          Parallel vs sequential comparison
               bitmap            SelectionBitmap operations
@@ -171,6 +171,7 @@ public static class Program
               shortcircuit      Any/First with early-exit optimization
               querycache        Query plan caching performance
               pagination        Take/Skip pagination operations
+              nullable          Nullable column null filtering performance
               all               Run all scenarios
             
             Example: dotnet run -- -s filter -r 1000000 -i 10 -o json --save
@@ -204,6 +205,7 @@ public static class Program
             "shortcircuit" => [new ShortCircuitScenario()],
             "querycache" => [new QueryPlanCacheScenario()],
             "pagination" => [new PaginationScenario()],
+            "nullable" => [new NullableColumnScenario()],
             _ => throw new ArgumentException($"Unknown scenario: {scenario}")
         };
 
@@ -251,7 +253,8 @@ public static class Program
         new PooledMaterializationScenario(),
         new ShortCircuitScenario(),
         new QueryPlanCacheScenario(),
-        new PaginationScenario()
+        new PaginationScenario(),
+        new NullableColumnScenario()
     ];
 
     private static async Task<string> CompareWithBaselineAsync(List<ProfilingResult> current, string baselinePath)
