@@ -1,5 +1,4 @@
 using System.Linq.Expressions;
-using System.Reflection;
 
 namespace FrozenArrow.Query.LogicalPlan;
 
@@ -159,6 +158,7 @@ public static class ExpressionHelper
                         "Min" => AggregationOperation.Min,
                         "Max" => AggregationOperation.Max,
                         "Count" => AggregationOperation.Count,
+                        "LongCount" => AggregationOperation.Count,
                         _ => (AggregationOperation?)null
                     };
 
@@ -166,10 +166,28 @@ public static class ExpressionHelper
                     {
                         // Try to extract column name from selector
                         string? columnName = null;
-                        if (methodCall.Arguments.Count > 1 
-                            && methodCall.Arguments[1] is UnaryExpression { Operand: LambdaExpression selectorLambda })
+                        
+                        // For Count/LongCount without selector, there's no column
+                        if (operation.Value == AggregationOperation.Count && methodCall.Arguments.Count == 1)
                         {
-                            TryExtractColumnName(selectorLambda, out columnName);
+                            // Count() with no selector
+                            columnName = null;
+                        }
+                        // For aggregates with a selector: Sum(x => x.Column)
+                        else if (methodCall.Arguments.Count > 1)
+                        {
+                            var selectorArg = methodCall.Arguments[1];
+                            
+                            // Handle Quote wrapper: Quote(Lambda)
+                            if (selectorArg is UnaryExpression { NodeType: ExpressionType.Quote, Operand: LambdaExpression quotedLambda })
+                            {
+                                TryExtractColumnName(quotedLambda, out columnName);
+                            }
+                            // Handle direct Lambda
+                            else if (selectorArg is LambdaExpression directLambda)
+                            {
+                                TryExtractColumnName(directLambda, out columnName);
+                            }
                         }
 
                         aggregations.Add(new AggregationDescriptor
@@ -213,16 +231,34 @@ public static class ExpressionHelper
                             "Min" => AggregationOperation.Min,
                             "Max" => AggregationOperation.Max,
                             "Count" => AggregationOperation.Count,
+                            "LongCount" => AggregationOperation.Count,
                             _ => (AggregationOperation?)null
                         };
 
                         if (operation.HasValue)
                         {
                             string? columnName = null;
-                            if (methodCall.Arguments.Count > 1
-                                && methodCall.Arguments[1] is UnaryExpression { Operand: LambdaExpression selectorLambda })
+                            
+                            // For Count/LongCount without selector, there's no column
+                            if (operation.Value == AggregationOperation.Count && methodCall.Arguments.Count == 1)
                             {
-                                TryExtractColumnName(selectorLambda, out columnName);
+                                columnName = null;
+                            }
+                            // For aggregates with a selector
+                            else if (methodCall.Arguments.Count > 1)
+                            {
+                                var selectorArg = methodCall.Arguments[1];
+                                
+                                // Handle Quote wrapper
+                                if (selectorArg is UnaryExpression { NodeType: ExpressionType.Quote, Operand: LambdaExpression quotedLambda })
+                                {
+                                    TryExtractColumnName(quotedLambda, out columnName);
+                                }
+                                // Handle direct Lambda
+                                else if (selectorArg is LambdaExpression directLambda)
+                                {
+                                    TryExtractColumnName(directLambda, out columnName);
+                                }
                             }
 
                             aggregations.Add(new AggregationDescriptor

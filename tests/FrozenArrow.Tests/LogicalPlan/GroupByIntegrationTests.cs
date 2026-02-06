@@ -54,7 +54,7 @@ public class GroupByIntegrationTests
         return records.ToFrozenArrow();
     }
 
-    [Fact(Skip = "GroupBy Select aggregation not fully supported yet")]
+    [Fact(Skip = "GroupBy with anonymous type needs Key property mapping in executor")]
     public void GroupBy_WithCount_ProducesCorrectResults()
     {
         // Arrange
@@ -84,7 +84,7 @@ public class GroupByIntegrationTests
         Assert.Equal(1, categoryD.Count);
     }
 
-    [Fact(Skip = "GroupBy Select aggregation not fully supported yet")]
+    [Fact(Skip = "GroupBy with anonymous type needs Key property mapping in executor")]
     public void GroupBy_WithSum_ProducesCorrectResults()
     {
         // Arrange
