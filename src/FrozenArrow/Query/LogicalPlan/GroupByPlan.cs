@@ -13,21 +13,24 @@ public sealed class GroupByPlan : LogicalPlanNode
     /// <param name="groupByColumn">The column to group by.</param>
     /// <param name="groupByKeyType">The CLR type of the group key.</param>
     /// <param name="aggregations">The aggregations to compute per group.</param>
+    /// <param name="keyPropertyName">Optional name of the property that should hold the group key in the result.</param>
     public GroupByPlan(
         LogicalPlanNode input,
         string groupByColumn,
         Type groupByKeyType,
-        IReadOnlyList<AggregationDescriptor> aggregations)
+        IReadOnlyList<AggregationDescriptor> aggregations,
+        string? keyPropertyName = null)
     {
         Input = input ?? throw new ArgumentNullException(nameof(input));
         GroupByColumn = groupByColumn ?? throw new ArgumentNullException(nameof(groupByColumn));
         GroupByKeyType = groupByKeyType ?? throw new ArgumentNullException(nameof(groupByKeyType));
         Aggregations = aggregations ?? throw new ArgumentNullException(nameof(aggregations));
+        KeyPropertyName = keyPropertyName;
 
         // Build output schema: Key + aggregation results
         var schema = new Dictionary<string, Type>
         {
-            ["Key"] = groupByKeyType
+            [keyPropertyName ?? "Key"] = groupByKeyType
         };
         foreach (var agg in aggregations)
         {
@@ -55,6 +58,12 @@ public sealed class GroupByPlan : LogicalPlanNode
     /// Gets the aggregations to compute per group.
     /// </summary>
     public IReadOnlyList<AggregationDescriptor> Aggregations { get; }
+
+    /// <summary>
+    /// Gets the name of the property that should hold the group key in the result.
+    /// If null, defaults to "Key".
+    /// </summary>
+    public string? KeyPropertyName { get; }
 
     public override string Description => 
         $"GroupBy({GroupByColumn}) ? [{string.Join(", ", Aggregations.Select(a => $"{a.Operation}({a.ColumnName ?? ""})"))}]";

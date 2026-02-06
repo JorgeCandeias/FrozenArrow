@@ -132,12 +132,13 @@ public sealed class LinqToLogicalPlanTranslator(
             && ExpressionHelper.TryExtractAggregations(selector, out var aggregations, out var groupKeyProperty)
             && aggregations is not null)
         {
-            // Create a new GroupByPlan with the extracted aggregations
+            // Create a new GroupByPlan with the extracted aggregations and key property name
             var groupByWithAggs = new GroupByPlan(
                 existingGroupBy.Input,
                 existingGroupBy.GroupByColumn,
                 existingGroupBy.GroupByKeyType,
-                aggregations);
+                aggregations,
+                groupKeyProperty); // Pass the key property name
             
             return groupByWithAggs;
         }

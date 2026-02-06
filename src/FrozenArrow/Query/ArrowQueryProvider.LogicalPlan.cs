@@ -146,6 +146,7 @@ public sealed partial class ArrowQueryProvider
                         PaginationBeforePredicates = paginationBeforePredicates,
                         GroupByColumn = groupBy.GroupByColumn,
                         GroupByKeyType = groupBy.GroupByKeyType,
+                        GroupByKeyResultPropertyName = groupBy.KeyPropertyName ?? "Key",
                         Aggregations = [.. groupBy.Aggregations]
                     };
 
