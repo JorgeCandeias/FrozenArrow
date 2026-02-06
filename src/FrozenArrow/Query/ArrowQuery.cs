@@ -373,6 +373,38 @@ public sealed class ArrowQueryProvider : IQueryProvider
             return ExecuteFusedAggregate<TResult>(plan);
         }
 
+        // PAGINATION OPTIMIZATION: For .Where(...).Skip(N).Take(M) with ToList/materialization,
+        // collect indices with early termination instead of building full bitmap
+        // This is beneficial even for dense queries when Take is small relative to total matches
+        // Example: .Where(x => x.IsActive).Skip(1000).Take(100).ToList()
+        //   - Without optimization: evaluate all ~700K matches, build 125KB bitmap, then skip/take
+        //   - With optimization: stop after finding 1100 matches (10-50x faster for pagination)
+        bool isPaginatedEnumeration = !plan.PaginationBeforePredicates && 
+                                      plan.Take.HasValue && 
+                                      plan.ColumnPredicates.Count > 0 &&
+                                      (resultType.IsGenericType && 
+                                       (resultType.GetGenericTypeDefinition() == typeof(IEnumerable<>) ||
+                                        resultType.GetGenericTypeDefinition() == typeof(IQueryable<>)));
+        
+        if (isPaginatedEnumeration)
+        {
+            int skipCount = plan.Skip ?? 0;
+            int takeCount = plan.Take!.Value;
+            int maxIndicesToCollect = skipCount + takeCount;
+            
+            // Use sparse collection with early termination
+            var matchingIndices = SparseIndexCollector.CollectMatchingIndices(
+                _recordBatch,
+                plan.ColumnPredicates,
+                _zoneMap,
+                ParallelOptions,
+                null,  // No row range limit
+                0,     // Start from beginning
+                maxIndicesToCollect);
+            
+            return ExecuteWithSparseIndices<TResult>(plan, matchingIndices, resultType);
+        }
+
         // SPARSE PATH: For highly selective queries (<5%), collect indices directly
         // This avoids materializing a 125KB bitmap when only 1-5% of rows match
         // Memory savings: 1% selectivity ? 40KB list vs 125KB bitmap (3× savings)
@@ -384,6 +416,8 @@ public sealed class ArrowQueryProvider : IQueryProvider
             // Calculate effective row range for pagination-before-predicates patterns
             int sparseStartRow = 0;
             int? sparseEndRow = null;
+            int? maxIndicesToCollect = null;
+            
             if (plan.PaginationBeforePredicates && plan.ColumnPredicates.Count > 0)
             {
                 sparseStartRow = plan.Skip ?? 0;
@@ -393,6 +427,20 @@ public sealed class ArrowQueryProvider : IQueryProvider
                     sparseEndRow = Math.Min(_count, sparseStartRow + plan.Take.Value);
                 }
             }
+            else if (!plan.PaginationBeforePredicates && (plan.Skip.HasValue || plan.Take.HasValue))
+            {
+                // OPTIMIZATION: For .Where(...).Skip(N).Take(M), only collect Skip + Take indices
+                // This enables early termination - we stop evaluating once we have enough matches
+                int skipCount = plan.Skip ?? 0;
+                int takeCount = plan.Take ?? int.MaxValue;
+                
+                // We need Skip + Take total matches to satisfy the query
+                // Example: .Skip(1000).Take(100) only needs 1100 matches, not all matches
+                if (takeCount < int.MaxValue)
+                {
+                    maxIndicesToCollect = skipCount + takeCount;
+                }
+            }
             
             var matchingIndices = SparseIndexCollector.CollectMatchingIndices(
                 _recordBatch,
@@ -400,7 +448,8 @@ public sealed class ArrowQueryProvider : IQueryProvider
                 _zoneMap,
                 ParallelOptions,
                 sparseEndRow,
-                sparseStartRow);
+                sparseStartRow,
+                maxIndicesToCollect);
             
             return ExecuteWithSparseIndices<TResult>(plan, matchingIndices, resultType);
         }

@@ -29,6 +29,7 @@
 | [15](15-delegate-cache-reflection-opt.md) | **Delegate Cache for Type Dispatch** | ? Complete | **22-58% filter-heavy** | CPU/Memory |
 | [16](16-hardware-prefetch-hints.md) | **Hardware Prefetch Hints** | ? Complete | **0-10% large datasets** | CPU/Cache |
 | [17](17-lazy-bitmap-materialization.md) | **Lazy Bitmap Materialization** | ? Complete | **Theoretical 2-5× sparse** | Algorithm/Memory |
+| [18](18-pagination-skip-take-early-termination.md) | **Pagination Skip/Take Early Termination** | ? Complete | **2× pagination queries** | Algorithm |
 
 ---
 

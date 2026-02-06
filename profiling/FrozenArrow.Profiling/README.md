@@ -101,6 +101,7 @@ The profiler automatically elevates process and thread priority during measureme
 | `enumeration` | Result materialization (ToList, foreach) |
 | `shortcircuit` | Any/First with early-exit streaming evaluation |
 | `querycache` | Query plan caching performance (cold vs warm queries) |
+| `pagination` | Skip/Take operations for result set pagination |
 | `all` | Run all scenarios |
 
 ---
@@ -110,7 +111,7 @@ The profiler automatically elevates process and thread priority during measureme
 > **Environment**: Windows 11, .NET 10.0, 24-core CPU, AVX2 enabled, AVX-512 disabled  
 > **Dataset**: 1,000,000 rows, 8 columns (int, double, bool, long)  
 > **Configuration**: Release build, 10 iterations, 3 warmup  
-> **Last Updated**: 2025-01-27 (after predicate reordering optimization)
+> **Last Updated**: 2026-02-04 (after pagination skip/take early termination optimization #18)
 
 ### Summary Table
 

@@ -11,8 +11,9 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-	<PackageReference Include="BenchmarkDotNet" Version="0.14.0" />
+	<PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
 	<PackageReference Include="DuckDB.NET.Data.Full" Version="1.4.3" />
+	<PackageReference Include="Microsoft.VisualStudio.DiagnosticsHub.BenchmarkDotNetDiagnosers" Version="18.3.36812.1" />
 	<PackageReference Include="protobuf-net" Version="3.2.52" />
 	</ItemGroup>
 

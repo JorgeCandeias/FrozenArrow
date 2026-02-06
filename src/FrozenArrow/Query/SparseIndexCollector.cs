@@ -29,6 +29,7 @@ internal static class SparseIndexCollector
     /// <param name="options">Parallel execution options.</param>
     /// <param name="maxRowToEvaluate">Maximum row index to evaluate (exclusive). If null, evaluates all rows.</param>
     /// <param name="minRowToEvaluate">Minimum row index to evaluate (inclusive). Default is 0.</param>
+    /// <param name="maxIndicesToCollect">Maximum number of indices to collect. Stops early when reached. Null means collect all.</param>
     /// <returns>List of row indices that match all predicates.</returns>
     public static List<int> CollectMatchingIndices(
         RecordBatch batch,
@@ -36,7 +37,8 @@ internal static class SparseIndexCollector
         ZoneMap? zoneMap = null,
         ParallelQueryOptions? options = null,
         int? maxRowToEvaluate = null,
-        int minRowToEvaluate = 0)
+        int minRowToEvaluate = 0,
+        int? maxIndicesToCollect = null)
     {
         options ??= ParallelQueryOptions.Default;
         var rowCount = maxRowToEvaluate ?? batch.Length;
@@ -62,18 +64,21 @@ internal static class SparseIndexCollector
         }
         
         // Estimate capacity: assume 5% selectivity (upper bound for sparse collection)
-        var estimatedCapacity = Math.Max(1000, rowCount / 20);
+        var estimatedCapacity = maxIndicesToCollect.HasValue 
+            ? Math.Min(maxIndicesToCollect.Value, Math.Max(1000, rowCount / 20))
+            : Math.Max(1000, rowCount / 20);
         var result = new List<int>(estimatedCapacity);
         
         // Sequential collection for small datasets
         if (rowCount < options.ParallelThreshold || !options.EnableParallelExecution)
         {
-            CollectSequential(predicates, columns, zoneMapData, zoneMap, minRowToEvaluate, rowCount, result);
+            CollectSequential(predicates, columns, zoneMapData, zoneMap, minRowToEvaluate, rowCount, result, maxIndicesToCollect);
             return result;
         }
         
         // Parallel collection for large datasets
-        return CollectParallel(predicates, columns, zoneMapData, zoneMap, minRowToEvaluate, rowCount, options);
+        // Note: Early termination is less effective in parallel mode, but still beneficial
+        return CollectParallel(predicates, columns, zoneMapData, zoneMap, minRowToEvaluate, rowCount, options, maxIndicesToCollect);
     }
     
     /// <summary>
@@ -86,13 +91,20 @@ internal static class SparseIndexCollector
         ZoneMap? zoneMap,
         int startRow,
         int endRow,
-        List<int> result)
+        List<int> result,
+        int? maxIndicesToCollect = null)
     {
         var chunkSize = 16_384;
         var chunkCount = (endRow - startRow + chunkSize - 1) / chunkSize;
         
         for (int chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++)
         {
+            // Early termination: stop once we've collected enough indices
+            if (maxIndicesToCollect.HasValue && result.Count >= maxIndicesToCollect.Value)
+            {
+                break;
+            }
+            
             int chunkStart = startRow + chunkIndex * chunkSize;
             int chunkEnd = Math.Min(chunkStart + chunkSize, endRow);
             
@@ -108,6 +120,12 @@ internal static class SparseIndexCollector
                 if (EvaluateAllPredicates(predicates, columns, row))
                 {
                     result.Add(row);
+                    
+                    // Early termination: stop immediately once we have enough indices
+                    if (maxIndicesToCollect.HasValue && result.Count >= maxIndicesToCollect.Value)
+                    {
+                        return; // Exit the method early
+                    }
                 }
             }
         }
@@ -123,7 +141,8 @@ internal static class SparseIndexCollector
         ZoneMap? zoneMap,
         int startRow,
         int endRow,
-        ParallelQueryOptions options)
+        ParallelQueryOptions options,
+        int? maxIndicesToCollect = null)
     {
         var chunkSize = options.ChunkSize;
         var rowCount = endRow - startRow;
@@ -135,11 +154,22 @@ internal static class SparseIndexCollector
             parallelOptions.MaxDegreeOfParallelism = options.MaxDegreeOfParallelism;
         }
         
+        // Shared counter for early termination (when maxIndicesToCollect is specified)
+        int collectedCount = 0;
+        
         // Each thread collects into its own list to avoid contention
         var threadLocalResults = new System.Collections.Concurrent.ConcurrentBag<List<int>>();
         
         Parallel.For(0, chunkCount, parallelOptions, () => new List<int>(1000), (chunkIndex, state, threadList) =>
         {
+            // Early termination check (check periodically, not per-row for performance)
+            if (maxIndicesToCollect.HasValue && 
+                Interlocked.CompareExchange(ref collectedCount, 0, 0) >= maxIndicesToCollect.Value)
+            {
+                state.Stop(); // Signal other threads to stop
+                return threadList;
+            }
+            
             int chunkStart = startRow + chunkIndex * chunkSize;
             int chunkEnd = Math.Min(chunkStart + chunkSize, endRow);
             
@@ -155,6 +185,17 @@ internal static class SparseIndexCollector
                 if (EvaluateAllPredicates(predicates, columns, row))
                 {
                     threadList.Add(row);
+                    
+                    // Update shared counter and check if we've collected enough
+                    if (maxIndicesToCollect.HasValue)
+                    {
+                        int currentCount = Interlocked.Increment(ref collectedCount);
+                        if (currentCount >= maxIndicesToCollect.Value)
+                        {
+                            state.Stop(); // Signal other threads to stop
+                            return threadList;
+                        }
+                    }
                 }
             }
             
@@ -175,14 +216,32 @@ internal static class SparseIndexCollector
             totalCapacity += list.Count;
         }
         
+        // If we have a limit and exceeded it, trim during merge
+        if (maxIndicesToCollect.HasValue && totalCapacity > maxIndicesToCollect.Value)
+        {
+            totalCapacity = maxIndicesToCollect.Value;
+        }
+        
         var merged = new List<int>(totalCapacity);
         foreach (var list in threadLocalResults)
         {
             merged.AddRange(list);
+            
+            // Stop merging if we've reached the limit
+            if (maxIndicesToCollect.HasValue && merged.Count >= maxIndicesToCollect.Value)
+            {
+                break;
+            }
         }
         
         // Sort indices for sequential access (better cache locality during enumeration)
         merged.Sort();
+        
+        // Trim to exact limit if we over-collected (can happen due to parallel race)
+        if (maxIndicesToCollect.HasValue && merged.Count > maxIndicesToCollect.Value)
+        {
+            merged.RemoveRange(maxIndicesToCollect.Value, merged.Count - maxIndicesToCollect.Value);
+        }
         
         return merged;
     }
