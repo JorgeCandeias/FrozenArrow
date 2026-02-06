@@ -86,7 +86,7 @@ public sealed class ArrowQuery<T> : IQueryable<T>, IOrderedQueryable<T>
 /// <summary>
 /// Query provider that handles LINQ expression execution over FrozenArrow.
 /// </summary>
-public sealed class ArrowQueryProvider : IQueryProvider
+public sealed partial class ArrowQueryProvider : IQueryProvider
 {
     private readonly object _source;
     private readonly Type _elementType;
@@ -194,8 +194,31 @@ public sealed class ArrowQueryProvider : IQueryProvider
         return TypedQueryProviderCache.Execute(this, elementType, expression);
     }
 
+    /// <summary>
+    /// Gets or sets whether to use the new logical plan execution path.
+    /// When true, queries will be translated to logical plans, optimized, and executed.
+    /// When false (default), queries use the existing QueryPlan path.
+    /// This is a feature flag to enable gradual rollout of the new architecture.
+    /// </summary>
+    public bool UseLogicalPlanExecution { get; set; } = false;
+
     public TResult Execute<TResult>(Expression expression)
     {
+        // NEW PATH: Try logical plan execution if enabled
+        if (UseLogicalPlanExecution)
+        {
+            try
+            {
+                return ExecuteWithLogicalPlan<TResult>(expression);
+            }
+            catch (NotSupportedException)
+            {
+                // Fall back to old path if logical plan translation fails
+                // This allows gradual adoption of the new architecture
+            }
+        }
+
+        // EXISTING PATH: Use current QueryPlan-based execution
         var plan = AnalyzeExpression(expression);
 
         if (!plan.IsFullyOptimized && StrictMode)

@@ -84,10 +84,19 @@ public sealed class LinqToLogicalPlanTranslator(
         // Extract the predicate lambda
         var lambda = (LambdaExpression)((UnaryExpression)methodCall.Arguments[1]).Operand;
         
+        // Create a properly typed lambda for PredicateAnalyzer
+        // PredicateAnalyzer expects Expression<Func<T, bool>> where T matches the element type
+        var parameter = Expression.Parameter(_elementType, lambda.Parameters[0].Name);
+        var rewrittenBody = new ParameterReplacer(lambda.Parameters[0], parameter).Visit(lambda.Body);
+        var typedLambda = Expression.Lambda(
+            typeof(Func<,>).MakeGenericType(_elementType, typeof(bool)),
+            rewrittenBody,
+            parameter);
+        
         // Analyze the predicate to extract column-level operations
-        var analysis = PredicateAnalyzer.Analyze(
-            (Expression<Func<object, bool>>)ConvertLambda(lambda, typeof(object)),
-            _columnIndexMap);
+        var analyzeMethod = typeof(PredicateAnalyzer).GetMethod(nameof(PredicateAnalyzer.Analyze))!
+            .MakeGenericMethod(_elementType);
+        var analysis = (PredicateAnalysisResult)analyzeMethod.Invoke(null, new object[] { typedLambda, _columnIndexMap })!;
 
         if (!analysis.IsFullySupported || analysis.Predicates.Count == 0)
         {
@@ -99,6 +108,26 @@ public sealed class LinqToLogicalPlanTranslator(
         double selectivity = EstimateSelectivity(analysis.Predicates);
 
         return new FilterPlan(input, analysis.Predicates, selectivity);
+    }
+
+    /// <summary>
+    /// Expression visitor that replaces parameter references.
+    /// </summary>
+    private sealed class ParameterReplacer : ExpressionVisitor
+    {
+        private readonly ParameterExpression _oldParameter;
+        private readonly ParameterExpression _newParameter;
+
+        public ParameterReplacer(ParameterExpression oldParameter, ParameterExpression newParameter)
+        {
+            _oldParameter = oldParameter;
+            _newParameter = newParameter;
+        }
+
+        protected override Expression VisitParameter(ParameterExpression node)
+        {
+            return node == _oldParameter ? _newParameter : base.VisitParameter(node);
+        }
     }
 
     private LogicalPlanNode TranslateSelect(MethodCallExpression methodCall, LogicalPlanNode input)
