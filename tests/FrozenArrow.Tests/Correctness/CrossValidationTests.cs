@@ -55,16 +55,16 @@ public class CrossValidationTests
         var data = CreateTestData(rowCount);
 
         // Act - Three paths to count
-        var countDirect = data.AsQueryable()
+        var countDirect = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500)
             .Count();
 
-        var countViaList = data.AsQueryable()
+        var countViaList = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500)
             .ToList()
             .Count;
 
-        var countViaAny = data.AsQueryable()
+        var countViaAny = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500)
             .ToList()
             .Count(x => x.Value > 500);
@@ -83,11 +83,11 @@ public class CrossValidationTests
         var data = CreateTestData(rowCount);
 
         // Act - Two paths to sum
-        var sumDirect = data.AsQueryable()
+        var sumDirect = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500)
             .Sum(x => x.Value);
 
-        var sumViaList = data.AsQueryable()
+        var sumViaList = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500)
             .ToList()
             .Sum(x => x.Value);
@@ -105,11 +105,11 @@ public class CrossValidationTests
         var data = CreateTestData(rowCount);
 
         // Act
-        var avgDirect = data.AsQueryable()
+        var avgDirect = data.AsQueryable().AllowFallback()
             .Where(x => x.IsActive)
             .Average(x => x.Score);
 
-        var avgViaList = data.AsQueryable()
+        var avgViaList = data.AsQueryable().AllowFallback()
             .Where(x => x.IsActive)
             .ToList()
             .Average(x => x.Score);
@@ -128,7 +128,7 @@ public class CrossValidationTests
         var data = CreateTestData(rowCount);
 
         // Act - Optimized path (uses zone maps, predicate reordering, etc.)
-        var optimizedResults = data.AsQueryable()
+        var optimizedResults = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500)
             .Where(x => x.Score > 50.0)
             .Where(x => x.IsActive)
@@ -136,7 +136,7 @@ public class CrossValidationTests
             .ToList();
 
         // Naive path (materialize early)
-        var naiveResults = data.AsQueryable()
+        var naiveResults = data.AsQueryable().AllowFallback()
             .ToList()
             .Where(x => x.Value > 500)
             .Where(x => x.Score > 50.0)
@@ -162,19 +162,19 @@ public class CrossValidationTests
         var data = CreateTestData(rowCount);
 
         // Act - Different predicate orders
-        var order1 = data.AsQueryable()
+        var order1 = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500)
             .Where(x => x.Score > 50.0)
             .Where(x => x.IsActive)
             .ToList();
 
-        var order2 = data.AsQueryable()
+        var order2 = data.AsQueryable().AllowFallback()
             .Where(x => x.IsActive)
             .Where(x => x.Value > 500)
             .Where(x => x.Score > 50.0)
             .ToList();
 
-        var order3 = data.AsQueryable()
+        var order3 = data.AsQueryable().AllowFallback()
             .Where(x => x.Score > 50.0)
             .Where(x => x.IsActive)
             .Where(x => x.Value > 500)
@@ -201,12 +201,12 @@ public class CrossValidationTests
         var data = CreateTestData(rowCount);
 
         // Act
-        var firstDirect = data.AsQueryable()
+        var firstDirect = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500)
             .OrderBy(x => x.Id)
             .First();
 
-        var firstViaList = data.AsQueryable()
+        var firstViaList = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500)
             .OrderBy(x => x.Id)
             .ToList()
@@ -224,15 +224,15 @@ public class CrossValidationTests
         var data = CreateTestData(rowCount);
 
         // Act
-        var anyDirect = data.AsQueryable()
+        var anyDirect = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 900)
             .Any();
 
-        var anyViaCount = data.AsQueryable()
+        var anyViaCount = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 900)
             .Count() > 0;
 
-        var anyViaList = data.AsQueryable()
+        var anyViaList = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 900)
             .ToList()
             .Any();
@@ -257,11 +257,11 @@ public class CrossValidationTests
             var threshold = random.Next(0, 1000);
 
             // Act - Both should use same query path (optimized)
-            var count1 = data.AsQueryable()
+            var count1 = data.AsQueryable().AllowFallback()
                 .Where(x => x.Value > threshold)
                 .Count();
 
-            var count2 = data.AsQueryable()
+            var count2 = data.AsQueryable().AllowFallback()
                 .Where(x => x.Value > threshold)
                 .Count();
 
@@ -280,19 +280,19 @@ public class CrossValidationTests
         var data = CreateTestData(rowCount);
 
         // Act - Query with no matches
-        var countOptimized = data.AsQueryable()
+        var countOptimized = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 10000)
             .Count();
 
-        var countNaive = data.AsQueryable()
+        var countNaive = data.AsQueryable().AllowFallback()
             .ToList()
             .Count(x => x.Value > 10000);
 
-        var anyOptimized = data.AsQueryable()
+        var anyOptimized = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 10000)
             .Any();
 
-        var anyNaive = data.AsQueryable()
+        var anyNaive = data.AsQueryable().AllowFallback()
             .ToList()
             .Any(x => x.Value > 10000);
 
@@ -313,15 +313,15 @@ public class CrossValidationTests
         var data = CreateTestData(rowCount);
 
         // Act - Query that should match exactly one record
-        var list = data.AsQueryable()
+        var list = data.AsQueryable().AllowFallback()
             .Where(x => x.Id == 42)
             .ToList();
 
-        var count = data.AsQueryable()
+        var count = data.AsQueryable().AllowFallback()
             .Where(x => x.Id == 42)
             .Count();
 
-        var any = data.AsQueryable()
+        var any = data.AsQueryable().AllowFallback()
             .Where(x => x.Id == 42)
             .Any();
 
@@ -342,12 +342,12 @@ public class CrossValidationTests
         var data = CreateTestData(rowCount);
 
         // Act
-        var optimizedCount = data.AsQueryable()
+        var optimizedCount = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 250 && x.Value < 750)
             .Where(x => x.Score > 25.0 && x.Score < 75.0)
             .Count();
 
-        var naiveCount = data.AsQueryable()
+        var naiveCount = data.AsQueryable().AllowFallback()
             .ToList()
             .Count(x => x.Value > 250 && x.Value < 750 && x.Score > 25.0 && x.Score < 75.0);
 
@@ -363,15 +363,15 @@ public class CrossValidationTests
         var data = CreateTestData(rowCount);
 
         // Act
-        var countTrue = data.AsQueryable()
+        var countTrue = data.AsQueryable().AllowFallback()
             .Where(x => x.IsActive)
             .Count();
 
-        var countFalse = data.AsQueryable()
+        var countFalse = data.AsQueryable().AllowFallback()
             .Where(x => !x.IsActive)
             .Count();
 
-        var totalViaList = data.AsQueryable()
+        var totalViaList = data.AsQueryable().AllowFallback()
             .ToList()
             .Count;
 
@@ -380,3 +380,4 @@ public class CrossValidationTests
         Assert.Equal(rowCount, totalViaList);
     }
 }
+

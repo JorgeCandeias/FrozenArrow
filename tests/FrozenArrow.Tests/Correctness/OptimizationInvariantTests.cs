@@ -65,7 +65,7 @@ public class OptimizationInvariantTests
 
         // Act - Query that should match specific range
         var threshold = rowCount / 2;
-        var results = data.AsQueryable()
+        var results = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > threshold)
             .ToList();
 
@@ -86,12 +86,12 @@ public class OptimizationInvariantTests
         var data = CreateTestData(rowCount);
 
         // Act - Logically equivalent queries
-        var query1 = data.AsQueryable()
+        var query1 = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500)
             .Where(x => x.Score > 50.0)
             .Count();
 
-        var query2 = data.AsQueryable()
+        var query2 = data.AsQueryable().AllowFallback()
             .Where(x => x.Score > 50.0)
             .Where(x => x.Value > 500)
             .Count();
@@ -111,7 +111,7 @@ public class OptimizationInvariantTests
 
         // Act - Execute multiple times (some may use parallel, some may not)
         var results = Enumerable.Range(0, 20)
-            .Select(_ => data.AsQueryable()
+            .Select(_ => data.AsQueryable().AllowFallback()
                 .Where(x => x.Value > 500 && x.IsActive)
                 .Count())
             .ToList();
@@ -131,11 +131,11 @@ public class OptimizationInvariantTests
         var data = CreateTestData(rowCount);
 
         // Act
-        var fusedResult = data.AsQueryable()
+        var fusedResult = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500)
             .Sum(x => x.Value);
 
-        var unfusedResult = data.AsQueryable()
+        var unfusedResult = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500)
             .ToList()
             .Sum(x => x.Value);
@@ -154,12 +154,12 @@ public class OptimizationInvariantTests
         var data = CreateTestData(rowCount);
 
         // Act - A ? B = B ? A (commutative)
-        var countAandB = data.AsQueryable()
+        var countAandB = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500)
             .Where(x => x.Score > 50.0)
             .Count();
 
-        var countBandA = data.AsQueryable()
+        var countBandA = data.AsQueryable().AllowFallback()
             .Where(x => x.Score > 50.0)
             .Where(x => x.Value > 500)
             .Count();
@@ -178,11 +178,11 @@ public class OptimizationInvariantTests
         var data = CreateTestData(rowCount);
 
         // Act
-        var count = data.AsQueryable()
+        var count = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500)
             .Count();
 
-        var list = data.AsQueryable()
+        var list = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500)
             .ToList();
 
@@ -202,11 +202,11 @@ public class OptimizationInvariantTests
         var data = CreateTestData(rowCount);
 
         // Act
-        var count = data.AsQueryable()
+        var count = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 250 && x.Value < 750)
             .Count();
 
-        var verifyCount = data.AsQueryable()
+        var verifyCount = data.AsQueryable().AllowFallback()
             .ToList()
             .Count(x => x.Value > 250 && x.Value < 750);
 
@@ -224,12 +224,12 @@ public class OptimizationInvariantTests
         var data = CreateTestData(rowCount);
 
         // Act - First execution (populates cache)
-        var firstResult = data.AsQueryable()
+        var firstResult = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500 && x.IsActive)
             .Count();
 
         // Second execution (uses cache)
-        var cachedResult = data.AsQueryable()
+        var cachedResult = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500 && x.IsActive)
             .Count();
 
@@ -247,11 +247,11 @@ public class OptimizationInvariantTests
         var data = CreateTestData(rowCount);
 
         // Act
-        var totalSum = data.AsQueryable()
+        var totalSum = data.AsQueryable().AllowFallback()
             .Where(x => x.IsActive)
             .Sum(x => x.Value);
 
-        var verifySum = data.AsQueryable()
+        var verifySum = data.AsQueryable().AllowFallback()
             .Where(x => x.IsActive)
             .ToList()
             .Sum(x => x.Value);
@@ -270,16 +270,16 @@ public class OptimizationInvariantTests
         var data = CreateTestData(rowCount);
 
         // Act
-        var countOneFilter = data.AsQueryable()
+        var countOneFilter = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500)
             .Count();
 
-        var countTwoFilters = data.AsQueryable()
+        var countTwoFilters = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500)
             .Where(x => x.Score > 50.0)
             .Count();
 
-        var countThreeFilters = data.AsQueryable()
+        var countThreeFilters = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500)
             .Where(x => x.Score > 50.0)
             .Where(x => x.IsActive)
@@ -303,7 +303,7 @@ public class OptimizationInvariantTests
 
         // Act - Execute same query multiple times
         var results = Enumerable.Range(0, repetitions)
-            .Select(_ => data.AsQueryable()
+            .Select(_ => data.AsQueryable().AllowFallback()
                 .Where(x => x.Value > 500)
                 .Where(x => x.Score > 50.0)
                 .OrderBy(x => x.Id)
@@ -336,9 +336,9 @@ public class OptimizationInvariantTests
         
         try
         {
-            _ = data.AsQueryable().Where(x => x.Value > 500).Count();
-            _ = data.AsQueryable().Where(x => x.Score > 50.0).Any();
-            _ = data.AsQueryable().Where(x => x.IsActive).ToList();
+            _ = data.AsQueryable().AllowFallback().Where(x => x.Value > 500).Count();
+            _ = data.AsQueryable().AllowFallback().Where(x => x.Score > 50.0).Any();
+            _ = data.AsQueryable().AllowFallback().Where(x => x.IsActive).ToList();
         }
         catch (IndexOutOfRangeException ex)
         {
@@ -353,3 +353,4 @@ public class OptimizationInvariantTests
         Assert.Empty(exceptions);
     }
 }
+

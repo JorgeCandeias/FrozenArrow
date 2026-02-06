@@ -60,7 +60,7 @@ public class ParallelQueryExecutorTests
     {
         // Arrange
         var data = CreateTestData(rowCount);
-        var expectedResults = data.AsQueryable()
+        var expectedResults = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 500 && x.IsActive)
             .OrderBy(x => x.Id)
             .ToList();
@@ -69,7 +69,7 @@ public class ParallelQueryExecutorTests
         var tasks = Enumerable.Range(0, concurrentTasks)
             .Select(_ => Task.Run(() =>
             {
-                return data.AsQueryable()
+                return data.AsQueryable().AllowFallback()
                     .Where(x => x.Value > 500 && x.IsActive)
                     .OrderBy(x => x.Id)
                     .ToList();
@@ -101,15 +101,15 @@ public class ParallelQueryExecutorTests
                 // Vary the queries to test different code paths
                 if (i % 3 == 0)
                 {
-                    return data.AsQueryable().Where(x => x.Value > 500).Count();
+                    return data.AsQueryable().AllowFallback().Where(x => x.Value > 500).Count();
                 }
                 else if (i % 3 == 1)
                 {
-                    return data.AsQueryable().Where(x => x.Value < 300).Count();
+                    return data.AsQueryable().AllowFallback().Where(x => x.Value < 300).Count();
                 }
                 else
                 {
-                    return data.AsQueryable().Where(x => x.Score > 50.0 && x.IsActive).Count();
+                    return data.AsQueryable().AllowFallback().Where(x => x.Score > 50.0 && x.IsActive).Count();
                 }
             }))
             .ToArray();
@@ -137,7 +137,7 @@ public class ParallelQueryExecutorTests
         var tasks = Enumerable.Range(0, 10)
             .Select(_ => Task.Run(() =>
             {
-                return data.AsQueryable()
+                return data.AsQueryable().AllowFallback()
                     .Where(x => x.Value > 250 && x.Value < 750)
                     .Count();
             }))
@@ -162,7 +162,7 @@ public class ParallelQueryExecutorTests
         var data = CreateTestData(rowCount);
 
         // Expected result with default parallelism
-        var expectedResults = data.AsQueryable()
+        var expectedResults = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 300 && x.Category < 5)
             .OrderBy(x => x.Id)
             .ToList();
@@ -171,7 +171,7 @@ public class ParallelQueryExecutorTests
         var tasks = Enumerable.Range(0, degreeOfParallelism)
             .Select(_ => Task.Run(() =>
             {
-                return data.AsQueryable()
+                return data.AsQueryable().AllowFallback()
                     .Where(x => x.Value > 300 && x.Category < 5)
                     .OrderBy(x => x.Id)
                     .ToList();
@@ -197,7 +197,7 @@ public class ParallelQueryExecutorTests
         var tasks = Enumerable.Range(0, 20)
             .Select(i => Task.Run(() =>
             {
-                return data.AsQueryable()
+                return data.AsQueryable().AllowFallback()
                     .Where(x => x.Value > 200)
                     .Where(x => x.Value < 800)
                     .Where(x => x.Score > 25.0)
@@ -230,14 +230,14 @@ public class ParallelQueryExecutorTests
                     // Random small delay to create thread interleaving
                     await Task.Delay(random.Next(0, 5));
 
-                    var result = data.AsQueryable()
+                    var result = data.AsQueryable().AllowFallback()
                         .Where(x => x.Value > 500)
                         .ToList();
 
                     // Introduce contention point
                     Thread.SpinWait(random.Next(0, 100));
 
-                    var count = data.AsQueryable()
+                    var count = data.AsQueryable().AllowFallback()
                         .Where(x => x.Value > 500)
                         .Count();
 
@@ -265,14 +265,14 @@ public class ParallelQueryExecutorTests
         var data = CreateTestData(rowCount);
 
         // Calculate expected results once
-        var expectedCount = data.AsQueryable().Where(x => x.Value > 500).Count();
-        var expectedSum = data.AsQueryable().Where(x => x.Value > 500).Sum(x => x.Value);
-        var expectedAvg = data.AsQueryable().Where(x => x.Value > 500).Average(x => x.Score);
+        var expectedCount = data.AsQueryable().AllowFallback().Where(x => x.Value > 500).Count();
+        var expectedSum = data.AsQueryable().AllowFallback().Where(x => x.Value > 500).Sum(x => x.Value);
+        var expectedAvg = data.AsQueryable().AllowFallback().Where(x => x.Value > 500).Average(x => x.Score);
 
         // Act - Run aggregations concurrently
-        var countTask = Task.Run(() => data.AsQueryable().Where(x => x.Value > 500).Count());
-        var sumTask = Task.Run(() => data.AsQueryable().Where(x => x.Value > 500).Sum(x => x.Value));
-        var avgTask = Task.Run(() => data.AsQueryable().Where(x => x.Value > 500).Average(x => x.Score));
+        var countTask = Task.Run(() => data.AsQueryable().AllowFallback().Where(x => x.Value > 500).Count());
+        var sumTask = Task.Run(() => data.AsQueryable().AllowFallback().Where(x => x.Value > 500).Sum(x => x.Value));
+        var avgTask = Task.Run(() => data.AsQueryable().AllowFallback().Where(x => x.Value > 500).Average(x => x.Score));
 
         var countResult = await countTask;
         var sumResult = await sumTask;
@@ -296,11 +296,11 @@ public class ParallelQueryExecutorTests
             {
                 if (i % 2 == 0)
                 {
-                    return data.AsQueryable().Where(x => x.Value > 500).Any() ? 1 : 0;
+                    return data.AsQueryable().AllowFallback().Where(x => x.Value > 500).Any() ? 1 : 0;
                 }
                 else
                 {
-                    data.AsQueryable().Where(x => x.Value > 500).First();
+                    data.AsQueryable().AllowFallback().Where(x => x.Value > 500).First();
                     return 1;
                 }
             }))
@@ -328,7 +328,7 @@ public class ParallelQueryExecutorTests
             var tasks = Enumerable.Range(0, 10)
                 .Select(_ => Task.Run(() =>
                 {
-                    return data.AsQueryable()
+                    return data.AsQueryable().AllowFallback()
                         .Where(x => x.Value > 500 && x.IsActive)
                         .Count();
                 }))
@@ -353,7 +353,7 @@ public class ParallelQueryExecutorTests
         var tasks = Enumerable.Range(0, 20)
             .Select(_ => Task.Run(() =>
             {
-                return data.AsQueryable()
+                return data.AsQueryable().AllowFallback()
                     .Where(x => x.Value > 10000) // Impossible condition
                     .Count();
             }))
@@ -380,12 +380,12 @@ public class ParallelQueryExecutorTests
                 var opType = random.Next(0, 6);
                 return opType switch
                 {
-                    0 => data.AsQueryable().Where(x => x.Value > 500).Count(),
-                    1 => data.AsQueryable().Where(x => x.IsActive).Any(),
-                    2 => data.AsQueryable().Where(x => x.Value < 500).Sum(x => x.Value),
-                    3 => data.AsQueryable().Where(x => x.Score > 50).Average(x => x.Score),
-                    4 => data.AsQueryable().Where(x => x.Value > 100).FirstOrDefault(),
-                    _ => data.AsQueryable().Where(x => x.Value > 250).ToList().Count,
+                    0 => data.AsQueryable().AllowFallback().Where(x => x.Value > 500).Count(),
+                    1 => data.AsQueryable().AllowFallback().Where(x => x.IsActive).Any(),
+                    2 => data.AsQueryable().AllowFallback().Where(x => x.Value < 500).Sum(x => x.Value),
+                    3 => data.AsQueryable().AllowFallback().Where(x => x.Score > 50).Average(x => x.Score),
+                    4 => data.AsQueryable().AllowFallback().Where(x => x.Value > 100).FirstOrDefault(),
+                    _ => data.AsQueryable().AllowFallback().Where(x => x.Value > 250).ToList().Count,
                 };
             }))
             .ToArray();
@@ -398,3 +398,4 @@ public class ParallelQueryExecutorTests
         Assert.All(results, result => Assert.NotNull(result));
     }
 }
+

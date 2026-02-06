@@ -60,13 +60,22 @@ public class ParallelCorrectnessTests
     }
 
     /// <summary>
+    /// Creates a queryable with fallback enabled for OrderBy support.
+    /// OrderBy is not optimized by ArrowQuery and requires fallback to LINQ-to-Objects.
+    /// </summary>
+    private static IQueryable<T> AsQueryableWithFallback<T>(FrozenArrow<T> data)
+    {
+        return data.AsQueryable().AllowFallback();
+    }
+
+    /// <summary>
     /// Executes query sequentially by forcing single-threaded execution.
     /// </summary>
     private static List<T> ExecuteSequential<T>(FrozenArrow<T> data, Func<IQueryable<T>, IQueryable<T>> queryFunc)
     {
         // Force sequential by limiting parallelism (if API available) or by design
         // For now, we'll use regular execution as baseline
-        return queryFunc(data.AsQueryable()).ToList();
+        return queryFunc(AsQueryableWithFallback(data)).ToList();
     }
 
     [Theory]
@@ -81,12 +90,12 @@ public class ParallelCorrectnessTests
         var data = CreateTestData(rowCount);
 
         // Act
-        var sequentialResults = data.AsQueryable()
+        var sequentialResults = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 500)
             .OrderBy(x => x.Id)
             .ToList();
 
-        var parallelResults = data.AsQueryable()
+        var parallelResults = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 500)
             .OrderBy(x => x.Id)
             .ToList();
@@ -109,7 +118,7 @@ public class ParallelCorrectnessTests
         var data = CreateTestData(rowCount);
 
         // Act - Complex multi-predicate query
-        var sequentialResults = data.AsQueryable()
+        var sequentialResults = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 0)
             .Where(x => x.DoubleValue < 50.0)
             .Where(x => x.BoolValue)
@@ -117,7 +126,7 @@ public class ParallelCorrectnessTests
             .OrderBy(x => x.Id)
             .ToList();
 
-        var parallelResults = data.AsQueryable()
+        var parallelResults = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 0)
             .Where(x => x.DoubleValue < 50.0)
             .Where(x => x.BoolValue)
@@ -138,11 +147,11 @@ public class ParallelCorrectnessTests
         var data = CreateTestData(rowCount);
 
         // Act
-        var sequentialCount = data.AsQueryable()
+        var sequentialCount = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 250 && x.BoolValue)
             .Count();
 
-        var parallelCount = data.AsQueryable()
+        var parallelCount = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 250 && x.BoolValue)
             .Count();
 
@@ -158,11 +167,11 @@ public class ParallelCorrectnessTests
         var data = CreateTestData(rowCount);
 
         // Act
-        var sequentialSum = data.AsQueryable()
+        var sequentialSum = AsQueryableWithFallback(data)
             .Where(x => x.BoolValue)
             .Sum(x => x.IntValue);
 
-        var parallelSum = data.AsQueryable()
+        var parallelSum = AsQueryableWithFallback(data)
             .Where(x => x.BoolValue)
             .Sum(x => x.IntValue);
 
@@ -178,11 +187,11 @@ public class ParallelCorrectnessTests
         var data = CreateTestData(rowCount);
 
         // Act
-        var sequentialAvg = data.AsQueryable()
+        var sequentialAvg = AsQueryableWithFallback(data)
             .Where(x => x.Category < 10)
             .Average(x => x.Score);
 
-        var parallelAvg = data.AsQueryable()
+        var parallelAvg = AsQueryableWithFallback(data)
             .Where(x => x.Category < 10)
             .Average(x => x.Score);
 
@@ -198,11 +207,11 @@ public class ParallelCorrectnessTests
         var data = CreateTestData(rowCount);
 
         // Act - Should short-circuit on first match
-        var sequentialAny = data.AsQueryable()
+        var sequentialAny = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 900)
             .Any();
 
-        var parallelAny = data.AsQueryable()
+        var parallelAny = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 900)
             .Any();
 
@@ -218,12 +227,12 @@ public class ParallelCorrectnessTests
         var data = CreateTestData(rowCount);
 
         // Act
-        var sequentialFirst = data.AsQueryable()
+        var sequentialFirst = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 800)
             .OrderBy(x => x.Id)
             .First();
 
-        var parallelFirst = data.AsQueryable()
+        var parallelFirst = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 800)
             .OrderBy(x => x.Id)
             .First();
@@ -240,11 +249,11 @@ public class ParallelCorrectnessTests
         var data = CreateTestData(rowCount);
 
         // Act - Query with no matches
-        var sequentialResults = data.AsQueryable()
+        var sequentialResults = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 10000) // Impossible
             .ToList();
 
-        var parallelResults = data.AsQueryable()
+        var parallelResults = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 10000)
             .ToList();
 
@@ -265,12 +274,12 @@ public class ParallelCorrectnessTests
         var data = CreateTestData(rowCount);
 
         // Act
-        var sequentialResults = data.AsQueryable()
+        var sequentialResults = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 0 && x.Category < 10)
             .OrderBy(x => x.Id)
             .ToList();
 
-        var parallelResults = data.AsQueryable()
+        var parallelResults = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 0 && x.Category < 10)
             .OrderBy(x => x.Id)
             .ToList();
@@ -288,11 +297,11 @@ public class ParallelCorrectnessTests
         var data = CreateTestData(rowCount);
 
         // Act - Very lenient predicate (most rows match)
-        var sequentialResults = data.AsQueryable()
+        var sequentialResults = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > -900)
             .Count();
 
-        var parallelResults = data.AsQueryable()
+        var parallelResults = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > -900)
             .Count();
 
@@ -309,11 +318,11 @@ public class ParallelCorrectnessTests
         var data = CreateTestData(rowCount);
 
         // Act - Very restrictive predicate (few rows match)
-        var sequentialResults = data.AsQueryable()
+        var sequentialResults = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 950)
             .Count();
 
-        var parallelResults = data.AsQueryable()
+        var parallelResults = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 950)
             .Count();
 
@@ -330,12 +339,12 @@ public class ParallelCorrectnessTests
         var data = CreateTestData(rowCount);
 
         // Act
-        var sequentialResults = data.AsQueryable()
+        var sequentialResults = AsQueryableWithFallback(data)
             .Where(x => x.StringValue.Contains("5"))
             .OrderBy(x => x.Id)
             .ToList();
 
-        var parallelResults = data.AsQueryable()
+        var parallelResults = AsQueryableWithFallback(data)
             .Where(x => x.StringValue.Contains("5"))
             .OrderBy(x => x.Id)
             .ToList();
@@ -352,19 +361,19 @@ public class ParallelCorrectnessTests
         var data = CreateTestData(rowCount);
 
         // Act
-        var sequentialTrue = data.AsQueryable()
+        var sequentialTrue = AsQueryableWithFallback(data)
             .Where(x => x.BoolValue)
             .Count();
 
-        var sequentialFalse = data.AsQueryable()
+        var sequentialFalse = AsQueryableWithFallback(data)
             .Where(x => !x.BoolValue)
             .Count();
 
-        var parallelTrue = data.AsQueryable()
+        var parallelTrue = AsQueryableWithFallback(data)
             .Where(x => x.BoolValue)
             .Count();
 
-        var parallelFalse = data.AsQueryable()
+        var parallelFalse = AsQueryableWithFallback(data)
             .Where(x => !x.BoolValue)
             .Count();
 
@@ -388,11 +397,11 @@ public class ParallelCorrectnessTests
             var threshold = random.Next(-500, 500);
             var categoryLimit = random.Next(0, 20);
 
-            var sequentialCount = data.AsQueryable()
+            var sequentialCount = AsQueryableWithFallback(data)
                 .Where(x => x.IntValue > threshold && x.Category < categoryLimit)
                 .Count();
 
-            var parallelCount = data.AsQueryable()
+            var parallelCount = AsQueryableWithFallback(data)
                 .Where(x => x.IntValue > threshold && x.Category < categoryLimit)
                 .Count();
 
@@ -400,7 +409,7 @@ public class ParallelCorrectnessTests
         }
     }
 
-    [Theory(Skip = "Known issue: Non-deterministic results with OrderBy + Take on large datasets. Needs investigation.")]
+    [Theory]
     [InlineData(1_000_000)] // Large dataset
     public void LargeDataset_ComplexQuery_ParallelMatchesSequential(int rowCount)
     {
@@ -408,8 +417,9 @@ public class ParallelCorrectnessTests
         var data = CreateTestData(rowCount);
 
         // Act - Complex query on large dataset
+        // Note: OrderBy requires fallback to LINQ-to-Objects (handled by AsQueryableWithFallback)
         var sw = Stopwatch.StartNew();
-        var sequentialResults = data.AsQueryable()
+        var sequentialResults = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 0)
             .Where(x => x.DoubleValue < 50.0)
             .Where(x => x.BoolValue)
@@ -420,7 +430,7 @@ public class ParallelCorrectnessTests
         var sequentialTime = sw.Elapsed;
 
         sw.Restart();
-        var parallelResults = data.AsQueryable()
+        var parallelResults = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 0)
             .Where(x => x.DoubleValue < 50.0)
             .Where(x => x.BoolValue)
@@ -444,7 +454,7 @@ public class ParallelCorrectnessTests
     {
         // Arrange
         var data = CreateTestData(rowCount);
-        var firstResults = data.AsQueryable()
+        var firstResults = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 300 && x.BoolValue)
             .OrderBy(x => x.Id)
             .ToList();
@@ -452,7 +462,7 @@ public class ParallelCorrectnessTests
         // Act & Assert - Execute same query multiple times
         for (int i = 0; i < repetitions; i++)
         {
-            var results = data.AsQueryable()
+            var results = AsQueryableWithFallback(data)
                 .Where(x => x.IntValue > 300 && x.BoolValue)
                 .OrderBy(x => x.Id)
                 .ToList();
@@ -469,11 +479,11 @@ public class ParallelCorrectnessTests
         var data = CreateTestData(rowCount);
 
         // Act - Test negated predicates
-        var sequentialResults = data.AsQueryable()
+        var sequentialResults = AsQueryableWithFallback(data)
             .Where(x => !(x.IntValue > 500))
             .Count();
 
-        var parallelResults = data.AsQueryable()
+        var parallelResults = AsQueryableWithFallback(data)
             .Where(x => !(x.IntValue > 500))
             .Count();
 
@@ -489,11 +499,11 @@ public class ParallelCorrectnessTests
         var data = CreateTestData(rowCount);
 
         // Act - Complex boolean logic with AND (OR not yet supported)
-        var sequentialResults = data.AsQueryable()
+        var sequentialResults = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 500 && x.BoolValue && x.Category < 10)
             .Count();
 
-        var parallelResults = data.AsQueryable()
+        var parallelResults = AsQueryableWithFallback(data)
             .Where(x => x.IntValue > 500 && x.BoolValue && x.Category < 10)
             .Count();
 
@@ -501,3 +511,4 @@ public class ParallelCorrectnessTests
         Assert.Equal(sequentialResults, parallelResults);
     }
 }
+

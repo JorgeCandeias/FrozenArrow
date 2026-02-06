@@ -1443,7 +1443,7 @@ internal sealed class QueryExpressionAnalyzer(Dictionary<string, int> columnInde
     [
         "Where", "Select", "First", "FirstOrDefault", "Single", "SingleOrDefault",
         "Any", "All", "Count", "LongCount", "Take", "Skip", "ToList", "ToArray",
-        "OrderBy", "OrderByDescending", "ThenBy", "ThenByDescending",
+        // OrderBy, OrderByDescending, ThenBy, ThenByDescending are NOT supported - they require fallback
         "Sum", "Average", "Min", "Max", "GroupBy", "ToDictionary"
     ];
 

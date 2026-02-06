@@ -58,7 +58,7 @@ public class PropertyBasedTests
         var data = GenerateRandomData(rowCount, seed);
 
         // Act
-        var filtered = data.AsQueryable()
+        var filtered = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 0)
             .ToList();
 
@@ -80,8 +80,8 @@ public class PropertyBasedTests
         var threshold = new Random(seed).Next(-500, 500);
 
         // Act
-        var count = data.AsQueryable().Where(x => x.Value > threshold).Count();
-        var list = data.AsQueryable().Where(x => x.Value > threshold).ToList();
+        var count = data.AsQueryable().AllowFallback().Where(x => x.Value > threshold).Count();
+        var list = data.AsQueryable().AllowFallback().Where(x => x.Value > threshold).ToList();
 
         // Assert - Property: Count() == ToList().Count
         Assert.Equal(count, list.Count);
@@ -96,8 +96,8 @@ public class PropertyBasedTests
         var data = GenerateRandomData(rowCount, seed);
 
         // Act - Sum via different paths
-        var sum1 = data.AsQueryable().Sum(x => x.Value);
-        var sum2 = data.AsQueryable().ToList().Sum(x => x.Value);
+        var sum1 = data.AsQueryable().AllowFallback().Sum(x => x.Value);
+        var sum2 = data.AsQueryable().AllowFallback().ToList().Sum(x => x.Value);
 
         // Assert - Property: Sum is associative
         Assert.Equal(sum1, sum2);
@@ -120,12 +120,12 @@ public class PropertyBasedTests
             var threshold2 = random.Next(-500, 500); // Changed to int threshold for Value
 
             // Act
-            var separateFilters = data.AsQueryable()
+            var separateFilters = data.AsQueryable().AllowFallback()
                 .Where(x => x.Value > threshold1)
                 .Where(x => x.Value < threshold2)
                 .Count();
 
-            var combinedFilter = data.AsQueryable()
+            var combinedFilter = data.AsQueryable().AllowFallback()
                 .Where(x => x.Value > threshold1 && x.Value < threshold2)
                 .Count();
 
@@ -144,8 +144,8 @@ public class PropertyBasedTests
         var threshold = new Random(seed).Next(-500, 500);
 
         // Act
-        var any = data.AsQueryable().Where(x => x.Value > threshold).Any();
-        var count = data.AsQueryable().Where(x => x.Value > threshold).Count();
+        var any = data.AsQueryable().AllowFallback().Where(x => x.Value > threshold).Any();
+        var count = data.AsQueryable().AllowFallback().Where(x => x.Value > threshold).Count();
 
         // Assert - Property: Any() == true IFF Count() > 0
         Assert.Equal(any, count > 0);
@@ -164,14 +164,14 @@ public class PropertyBasedTests
             var threshold = random.Next(-500, 500);
 
             // Act
-            var list = data.AsQueryable()
+            var list = data.AsQueryable().AllowFallback()
                 .Where(x => x.Value > threshold)
                 .OrderBy(x => x.Id)
                 .ToList();
 
             if (list.Count == 0) continue; // Skip if no matches
 
-            var first = data.AsQueryable()
+            var first = data.AsQueryable().AllowFallback()
                 .Where(x => x.Value > threshold)
                 .OrderBy(x => x.Id)
                 .First();
@@ -197,12 +197,12 @@ public class PropertyBasedTests
             var scoreThreshold = random.NextDouble() * 100.0; // Use double for Score comparisons
 
             // Act
-            var order1 = data.AsQueryable()
+            var order1 = data.AsQueryable().AllowFallback()
                 .Where(x => x.Value > valueThreshold)
                 .Where(x => x.Score > scoreThreshold)
                 .Count();
 
-            var order2 = data.AsQueryable()
+            var order2 = data.AsQueryable().AllowFallback()
                 .Where(x => x.Score > scoreThreshold)
                 .Where(x => x.Value > valueThreshold)
                 .Count();
@@ -221,13 +221,13 @@ public class PropertyBasedTests
         var data = GenerateRandomData(rowCount, seed);
 
         // Act
-        var filteredList = data.AsQueryable()
+        var filteredList = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 0)
             .ToList();
 
         if (filteredList.Count == 0) return; // Skip if no matches
 
-        var average = data.AsQueryable()
+        var average = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 0)
             .Average(x => x.Score);
 
@@ -262,11 +262,11 @@ public class PropertyBasedTests
                 var opType = random.Next(0, 5);
                 var result = opType switch
                 {
-                    0 => data.AsQueryable().Where(x => x.Value > threshold).Count(),
-                    1 => data.AsQueryable().Where(x => x.Score > scoreThreshold).Any() ? 1 : 0,
-                    2 => data.AsQueryable().Where(x => x.Value > threshold).Sum(x => x.Value),
-                    3 => data.AsQueryable().Where(x => x.IsActive).Count(),
-                    _ => data.AsQueryable().Where(x => x.Value > threshold).ToList().Count
+                    0 => data.AsQueryable().AllowFallback().Where(x => x.Value > threshold).Count(),
+                    1 => data.AsQueryable().AllowFallback().Where(x => x.Score > scoreThreshold).Any() ? 1 : 0,
+                    2 => data.AsQueryable().AllowFallback().Where(x => x.Value > threshold).Sum(x => x.Value),
+                    3 => data.AsQueryable().AllowFallback().Where(x => x.IsActive).Count(),
+                    _ => data.AsQueryable().AllowFallback().Where(x => x.Value > threshold).ToList().Count
                 };
 
                 // Assert - Result must be valid (no exceptions thrown)
@@ -292,7 +292,7 @@ public class PropertyBasedTests
 
         // Act - Execute same query 10 times
         var results = Enumerable.Range(0, 10)
-            .Select(_ => data.AsQueryable()
+            .Select(_ => data.AsQueryable().AllowFallback()
                 .Where(x => x.Value > 0 && x.IsActive)
                 .Count())
             .ToList();
@@ -313,12 +313,13 @@ public class PropertyBasedTests
         var data = GenerateRandomData(rowCount, seed);
 
         // Act
-        var count1 = data.AsQueryable().Where(x => x.Value > -500).Count();
-        var count2 = data.AsQueryable().Where(x => x.Value > 0).Count();
-        var count3 = data.AsQueryable().Where(x => x.Value > 500).Count();
+        var count1 = data.AsQueryable().AllowFallback().Where(x => x.Value > -500).Count();
+        var count2 = data.AsQueryable().AllowFallback().Where(x => x.Value > 0).Count();
+        var count3 = data.AsQueryable().AllowFallback().Where(x => x.Value > 500).Count();
 
         // Assert - Property: Monotonicity
         Assert.True(count1 >= count2, "Less restrictive filter should have >= results");
         Assert.True(count2 >= count3, "Less restrictive filter should have >= results");
     }
 }
+

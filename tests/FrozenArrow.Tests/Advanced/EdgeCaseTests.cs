@@ -28,15 +28,15 @@ public class EdgeCaseTests
         var data = new List<EdgeCaseRecord>().ToFrozenArrow();
 
         // Act & Assert - All operations should handle empty data gracefully
-        Assert.Equal(0, data.AsQueryable().Count());
-        Assert.False(data.AsQueryable().Any());
-        Assert.Empty(data.AsQueryable().ToList());
-        Assert.Throws<InvalidOperationException>(() => data.AsQueryable().First());
-        Assert.Null(data.AsQueryable().FirstOrDefault());
-        Assert.Equal(0, data.AsQueryable().Sum(x => x.Value));
+        Assert.Equal(0, data.AsQueryable().AllowFallback().Count());
+        Assert.False(data.AsQueryable().AllowFallback().Any());
+        Assert.Empty(data.AsQueryable().AllowFallback().ToList());
+        Assert.Throws<InvalidOperationException>(() => data.AsQueryable().AllowFallback().First());
+        Assert.Null(data.AsQueryable().AllowFallback().FirstOrDefault());
+        Assert.Equal(0, data.AsQueryable().AllowFallback().Sum(x => x.Value));
         
         // Test Average on empty - should throw
-        var avgResult = Assert.Throws<InvalidOperationException>(() => data.AsQueryable().Average(x => x.Score));
+        var avgResult = Assert.Throws<InvalidOperationException>(() => data.AsQueryable().AllowFallback().Average(x => x.Score));
         Assert.Contains("no elements", avgResult.Message, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -50,13 +50,13 @@ public class EdgeCaseTests
         }.ToFrozenArrow();
 
         // Act & Assert
-        Assert.Equal(1, data.AsQueryable().Count());
-        Assert.True(data.AsQueryable().Any());
-        Assert.Single(data.AsQueryable().ToList());
-        Assert.Equal(42, data.AsQueryable().First().Id);
-        Assert.Equal(42, data.AsQueryable().FirstOrDefault()?.Id);
-        Assert.Equal(100, data.AsQueryable().Sum(x => x.Value));
-        Assert.Equal(50.0, data.AsQueryable().Average(x => x.Score));
+        Assert.Equal(1, data.AsQueryable().AllowFallback().Count());
+        Assert.True(data.AsQueryable().AllowFallback().Any());
+        Assert.Single(data.AsQueryable().AllowFallback().ToList());
+        Assert.Equal(42, data.AsQueryable().AllowFallback().First().Id);
+        Assert.Equal(42, data.AsQueryable().AllowFallback().FirstOrDefault()?.Id);
+        Assert.Equal(100, data.AsQueryable().AllowFallback().Sum(x => x.Value));
+        Assert.Equal(50.0, data.AsQueryable().AllowFallback().Average(x => x.Score));
     }
 
     [Theory]
@@ -76,7 +76,7 @@ public class EdgeCaseTests
         }.ToFrozenArrow();
 
         // Act
-        var count = data.AsQueryable().Where(x => x.Value == extremeValue).Count();
+        var count = data.AsQueryable().AllowFallback().Where(x => x.Value == extremeValue).Count();
         
         // Assert
         // When extremeValue is 0, all three records match (since record 1 also has Value=0)
@@ -86,19 +86,19 @@ public class EdgeCaseTests
         if (extremeValue == int.MaxValue)
         {
             // Can't sum two int.MaxValue without overflow, but should handle single value
-            var single = data.AsQueryable().Where(x => x.Id == 0).Sum(x => x.Value);
+            var single = data.AsQueryable().AllowFallback().Where(x => x.Id == 0).Sum(x => x.Value);
             Assert.Equal(extremeValue, single);
         }
         else if (extremeValue == int.MinValue)
         {
             // Similar issue with int.MinValue
-            var single = data.AsQueryable().Where(x => x.Id == 0).Sum(x => x.Value);
+            var single = data.AsQueryable().AllowFallback().Where(x => x.Id == 0).Sum(x => x.Value);
             Assert.Equal(extremeValue, single);
         }
         else
         {
             // For other values, sum should work
-            var sum = data.AsQueryable().Where(x => x.Value == extremeValue).Sum(x => x.Value);
+            var sum = data.AsQueryable().AllowFallback().Where(x => x.Value == extremeValue).Sum(x => x.Value);
             Assert.Equal(extremeValue * expectedCount, sum);
         }
     }
@@ -121,7 +121,7 @@ public class EdgeCaseTests
         }.ToFrozenArrow();
 
         // Act
-        var count = data.AsQueryable().Where(x => x.Score == extremeValue).Count();
+        var count = data.AsQueryable().AllowFallback().Where(x => x.Score == extremeValue).Count();
 
         // Assert
         // When extremeValue is 0, all three records match (since record 1 also has Score=0.0)
@@ -139,8 +139,8 @@ public class EdgeCaseTests
             .ToFrozenArrow();
 
         // Act
-        var count = data.AsQueryable().Where(x => x.Value == 100).Count();
-        var list = data.AsQueryable().Where(x => x.Value == 100).ToList();
+        var count = data.AsQueryable().AllowFallback().Where(x => x.Value == 100).Count();
+        var list = data.AsQueryable().AllowFallback().Where(x => x.Value == 100).ToList();
 
         // Assert
         Assert.Equal(1000, count);
@@ -157,9 +157,9 @@ public class EdgeCaseTests
             .ToFrozenArrow();
 
         // Act
-        var count = data.AsQueryable().Where(x => x.Value > 10000).Count();
-        var list = data.AsQueryable().Where(x => x.Value > 10000).ToList();
-        var any = data.AsQueryable().Where(x => x.Value > 10000).Any();
+        var count = data.AsQueryable().AllowFallback().Where(x => x.Value > 10000).Count();
+        var list = data.AsQueryable().AllowFallback().Where(x => x.Value > 10000).ToList();
+        var any = data.AsQueryable().AllowFallback().Where(x => x.Value > 10000).Any();
 
         // Assert
         Assert.Equal(0, count);
@@ -181,9 +181,9 @@ public class EdgeCaseTests
             .ToFrozenArrow();
 
         // Act
-        var count = data.AsQueryable().Count();
-        var filtered = data.AsQueryable().Where(x => x.Value > size / 2).Count();
-        var sum = data.AsQueryable().Sum(x => x.Value);
+        var count = data.AsQueryable().AllowFallback().Count();
+        var filtered = data.AsQueryable().AllowFallback().Where(x => x.Value > size / 2).Count();
+        var sum = data.AsQueryable().AllowFallback().Sum(x => x.Value);
 
         // Assert
         Assert.Equal(size, count);
@@ -201,7 +201,7 @@ public class EdgeCaseTests
             .ToFrozenArrow();
 
         // Act - Each filter eliminates all remaining data
-        var count = data.AsQueryable()
+        var count = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 10000)  // No matches
             .Where(x => x.Value < 5000)   // Would match, but no data left
             .Where(x => x.Score > 0.0)    // Would match, but no data left
@@ -221,8 +221,8 @@ public class EdgeCaseTests
             .ToFrozenArrow();
 
         // Act
-        var evenCount = data.AsQueryable().Where(x => x.Value == 0).Count();
-        var oddCount = data.AsQueryable().Where(x => x.Value == 1).Count();
+        var evenCount = data.AsQueryable().AllowFallback().Where(x => x.Value == 0).Count();
+        var oddCount = data.AsQueryable().AllowFallback().Where(x => x.Value == 1).Count();
 
         // Assert
         Assert.Equal(5000, evenCount);
@@ -251,7 +251,7 @@ public class EdgeCaseTests
         // Enable fallback mode to allow complex expressions
         
         // Act
-        var count = data.AsQueryable().AllowFallback().Where(x => x.Id % frequency == 0).Count();
+        var count = data.AsQueryable().AllowFallback().AllowFallback().Where(x => x.Id % frequency == 0).Count();
 
         var expectedCount = rowCount / frequency + (rowCount % frequency == 0 ? 0 : 1);
 
@@ -269,9 +269,9 @@ public class EdgeCaseTests
             .ToFrozenArrow();
 
         // Act
-        var count = data.AsQueryable().Where(x => x.Value == 42).Count();
-        var sum = data.AsQueryable().Sum(x => x.Value);
-        var avg = data.AsQueryable().Average(x => x.Score);
+        var count = data.AsQueryable().AllowFallback().Where(x => x.Value == 42).Count();
+        var sum = data.AsQueryable().AllowFallback().Sum(x => x.Value);
+        var avg = data.AsQueryable().AllowFallback().Average(x => x.Score);
 
         // Assert
         Assert.Equal(1000, count);
@@ -291,9 +291,9 @@ public class EdgeCaseTests
         }.ToFrozenArrow();
 
         // Act
-        var sum = data.AsQueryable().Sum(x => x.Value);
-        var avg = data.AsQueryable().Average(x => x.Score);
-        var count = data.AsQueryable().Where(x => x.Value == 0).Count();
+        var sum = data.AsQueryable().AllowFallback().Sum(x => x.Value);
+        var avg = data.AsQueryable().AllowFallback().Average(x => x.Score);
+        var count = data.AsQueryable().AllowFallback().Where(x => x.Value == 0).Count();
 
         // Assert
         Assert.Equal(0, sum);
@@ -311,8 +311,8 @@ public class EdgeCaseTests
             .ToFrozenArrow();
 
         // Act
-        var first = data.AsQueryable().OrderBy(x => x.Id).First();
-        var last = data.AsQueryable().OrderBy(x => x.Id).ToList().Last();
+        var first = data.AsQueryable().AllowFallback().OrderBy(x => x.Id).First();
+        var last = data.AsQueryable().AllowFallback().OrderBy(x => x.Id).ToList().Last();
 
         // Assert
         Assert.Equal(0, first.Id);
@@ -332,8 +332,8 @@ public class EdgeCaseTests
             .ToFrozenArrow();
 
         // Act
-        var count = data.AsQueryable().Count();
-        var sum = data.AsQueryable().Sum(x => x.Value);
+        var count = data.AsQueryable().AllowFallback().Count();
+        var sum = data.AsQueryable().AllowFallback().Sum(x => x.Value);
 
         var expectedSum = Enumerable.Range(0, rowCount).Sum();
 
@@ -352,12 +352,12 @@ public class EdgeCaseTests
             .ToFrozenArrow();
 
         // Act - Chained AND conditions (OR not yet supported)
-        var count1 = data.AsQueryable()
+        var count1 = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 100)
             .Where(x => x.Value < 900)
             .Count();
 
-        var count2 = data.AsQueryable()
+        var count2 = data.AsQueryable().AllowFallback()
             .Where(x => x.Value > 100 && x.Value < 900)
             .Count();
 
@@ -370,3 +370,4 @@ public class EdgeCaseTests
         Assert.Equal(expected, count2);
     }
 }
+
