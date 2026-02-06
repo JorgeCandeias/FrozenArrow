@@ -248,6 +248,9 @@ internal static class ParallelQueryExecutor
         var hasNulls = array.NullCount > 0;
         int i = startIndex;
 
+        // OPTIMIZATION: Hoist operator switch outside the SIMD loop.
+        var cmp = new ComparisonDecomposition(predicate.Operator);
+
         // SIMD path: process 8 elements at a time with AVX2
         if (Vector256.IsHardwareAccelerated && (endIndex - startIndex) >= 8)
         {
@@ -277,16 +280,8 @@ internal static class ParallelQueryExecutor
 
                 var data = Vector256.LoadUnsafe(ref Unsafe.Add(ref valuesRef, i));
                 
-                Vector256<int> mask = predicate.Operator switch
-                {
-                    ComparisonOperator.Equal => Vector256.Equals(data, compareValue),
-                    ComparisonOperator.NotEqual => ~Vector256.Equals(data, compareValue),
-                    ComparisonOperator.LessThan => Vector256.LessThan(data, compareValue),
-                    ComparisonOperator.LessThanOrEqual => Vector256.LessThanOrEqual(data, compareValue),
-                    ComparisonOperator.GreaterThan => Vector256.GreaterThan(data, compareValue),
-                    ComparisonOperator.GreaterThanOrEqual => Vector256.GreaterThanOrEqual(data, compareValue),
-                    _ => Vector256<int>.Zero
-                };
+                // Perform comparison using pre-resolved decomposition (no per-iteration switch)
+                var mask = cmp.Compare(data, compareValue);
 
                 // Apply mask with null checks
                 if (Avx2.IsSupported)
@@ -338,18 +333,7 @@ internal static class ParallelQueryExecutor
             }
             
             var columnValue = values[i];
-            var matches = predicate.Operator switch
-            {
-                ComparisonOperator.Equal => columnValue == predicate.Value,
-                ComparisonOperator.NotEqual => columnValue != predicate.Value,
-                ComparisonOperator.LessThan => columnValue < predicate.Value,
-                ComparisonOperator.LessThanOrEqual => columnValue <= predicate.Value,
-                ComparisonOperator.GreaterThan => columnValue > predicate.Value,
-                ComparisonOperator.GreaterThanOrEqual => columnValue >= predicate.Value,
-                _ => false
-            };
-            
-            if (!matches)
+            if (!EvaluateScalarInt32(columnValue, predicate.Value, predicate.Operator))
             {
                 SelectionBitmap.ClearBit(selectionBuffer, i);
             }
@@ -377,18 +361,7 @@ internal static class ParallelQueryExecutor
             }
             
             var columnValue = RunLengthEncodedArrayBuilder.GetInt32Value(column, i);
-            var matches = predicate.Operator switch
-            {
-                ComparisonOperator.Equal => columnValue == predicate.Value,
-                ComparisonOperator.NotEqual => columnValue != predicate.Value,
-                ComparisonOperator.LessThan => columnValue < predicate.Value,
-                ComparisonOperator.LessThanOrEqual => columnValue <= predicate.Value,
-                ComparisonOperator.GreaterThan => columnValue > predicate.Value,
-                ComparisonOperator.GreaterThanOrEqual => columnValue >= predicate.Value,
-                _ => false
-            };
-            
-            if (!matches)
+            if (!EvaluateScalarInt32(columnValue, predicate.Value, predicate.Operator))
             {
                 SelectionBitmap.ClearBit(selectionBuffer, i);
             }
@@ -432,6 +405,9 @@ internal static class ParallelQueryExecutor
         var hasNulls = array.NullCount > 0;
         int i = startIndex;
 
+        // OPTIMIZATION: Hoist operator switch outside the SIMD loop.
+        var cmp = new ComparisonDecomposition(predicate.Operator);
+
         // SIMD path: process 4 elements at a time
         if (Vector256.IsHardwareAccelerated && (endIndex - startIndex) >= 4)
         {
@@ -460,16 +436,8 @@ internal static class ParallelQueryExecutor
 
                 var data = Vector256.LoadUnsafe(ref Unsafe.Add(ref valuesRef, i));
                 
-                Vector256<double> mask = predicate.Operator switch
-                {
-                    ComparisonOperator.Equal => Vector256.Equals(data, compareValue),
-                    ComparisonOperator.NotEqual => ~Vector256.Equals(data, compareValue),
-                    ComparisonOperator.LessThan => Vector256.LessThan(data, compareValue),
-                    ComparisonOperator.LessThanOrEqual => Vector256.LessThanOrEqual(data, compareValue),
-                    ComparisonOperator.GreaterThan => Vector256.GreaterThan(data, compareValue),
-                    ComparisonOperator.GreaterThanOrEqual => Vector256.GreaterThanOrEqual(data, compareValue),
-                    _ => Vector256<double>.Zero
-                };
+                // Perform comparison using pre-resolved decomposition (no per-iteration switch)
+                var mask = cmp.Compare(data, compareValue);
 
                 if (Avx.IsSupported)
                 {
@@ -516,18 +484,7 @@ internal static class ParallelQueryExecutor
             }
             
             var columnValue = values[i];
-            var matches = predicate.Operator switch
-            {
-                ComparisonOperator.Equal => columnValue == predicate.Value,
-                ComparisonOperator.NotEqual => columnValue != predicate.Value,
-                ComparisonOperator.LessThan => columnValue < predicate.Value,
-                ComparisonOperator.LessThanOrEqual => columnValue <= predicate.Value,
-                ComparisonOperator.GreaterThan => columnValue > predicate.Value,
-                ComparisonOperator.GreaterThanOrEqual => columnValue >= predicate.Value,
-                _ => false
-            };
-            
-            if (!matches)
+            if (!EvaluateScalarDouble(columnValue, predicate.Value, predicate.Operator))
             {
                 SelectionBitmap.ClearBit(selectionBuffer, i);
             }
@@ -552,18 +509,7 @@ internal static class ParallelQueryExecutor
             }
             
             var columnValue = RunLengthEncodedArrayBuilder.GetDoubleValue(column, i);
-            var matches = predicate.Operator switch
-            {
-                ComparisonOperator.Equal => columnValue == predicate.Value,
-                ComparisonOperator.NotEqual => columnValue != predicate.Value,
-                ComparisonOperator.LessThan => columnValue < predicate.Value,
-                ComparisonOperator.LessThanOrEqual => columnValue <= predicate.Value,
-                ComparisonOperator.GreaterThan => columnValue > predicate.Value,
-                ComparisonOperator.GreaterThanOrEqual => columnValue >= predicate.Value,
-                _ => false
-            };
-            
-            if (!matches)
+            if (!EvaluateScalarDouble(columnValue, predicate.Value, predicate.Operator))
             {
                 SelectionBitmap.ClearBit(selectionBuffer, i);
             }
@@ -670,5 +616,41 @@ internal static class ParallelQueryExecutor
         var andMask = (ulong)(mask & 0x0F) << bitOffset;
         
         buffer[blockIndex] = (buffer[blockIndex] & preserveMask) | (buffer[blockIndex] & andMask);
+    }
+
+    /// <summary>
+    /// Evaluates a scalar Int32 comparison. Used in scalar tails to avoid per-iteration operator switch.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool EvaluateScalarInt32(int columnValue, int predicateValue, ComparisonOperator op)
+    {
+        return op switch
+        {
+            ComparisonOperator.Equal => columnValue == predicateValue,
+            ComparisonOperator.NotEqual => columnValue != predicateValue,
+            ComparisonOperator.LessThan => columnValue < predicateValue,
+            ComparisonOperator.LessThanOrEqual => columnValue <= predicateValue,
+            ComparisonOperator.GreaterThan => columnValue > predicateValue,
+            ComparisonOperator.GreaterThanOrEqual => columnValue >= predicateValue,
+            _ => false
+        };
+    }
+
+    /// <summary>
+    /// Evaluates a scalar Double comparison. Used in scalar tails to avoid per-iteration operator switch.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool EvaluateScalarDouble(double columnValue, double predicateValue, ComparisonOperator op)
+    {
+        return op switch
+        {
+            ComparisonOperator.Equal => columnValue == predicateValue,
+            ComparisonOperator.NotEqual => columnValue != predicateValue,
+            ComparisonOperator.LessThan => columnValue < predicateValue,
+            ComparisonOperator.LessThanOrEqual => columnValue <= predicateValue,
+            ComparisonOperator.GreaterThan => columnValue > predicateValue,
+            ComparisonOperator.GreaterThanOrEqual => columnValue >= predicateValue,
+            _ => false
+        };
     }
 }

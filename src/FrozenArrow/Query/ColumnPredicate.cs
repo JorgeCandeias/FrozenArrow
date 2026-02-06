@@ -157,6 +157,77 @@ public enum ComparisonOperator
 }
 
 /// <summary>
+/// Base SIMD comparison operations. Every ComparisonOperator can be expressed
+/// as one of these three base operations, optionally bitwise-negated.
+/// </summary>
+internal enum SimdBaseOp : byte
+{
+    Equals = 0,
+    LessThan = 1,
+    GreaterThan = 2
+}
+
+/// <summary>
+/// Pre-computed decomposition of a ComparisonOperator into a base SIMD operation
+/// and a negate flag. Resolved once before a SIMD loop to eliminate per-iteration switch overhead.
+/// </summary>
+internal readonly struct ComparisonDecomposition
+{
+    public readonly SimdBaseOp BaseOp;
+    public readonly bool Negate;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ComparisonDecomposition(ComparisonOperator op)
+    {
+        // Decompose: Equal=Equals, NotEqual=~Equals, LessThan=LessThan,
+        // LessThanOrEqual=~GreaterThan, GreaterThan=GreaterThan, GreaterThanOrEqual=~LessThan
+        (BaseOp, Negate) = op switch
+        {
+            ComparisonOperator.Equal => (SimdBaseOp.Equals, false),
+            ComparisonOperator.NotEqual => (SimdBaseOp.Equals, true),
+            ComparisonOperator.LessThan => (SimdBaseOp.LessThan, false),
+            ComparisonOperator.LessThanOrEqual => (SimdBaseOp.GreaterThan, true),
+            ComparisonOperator.GreaterThan => (SimdBaseOp.GreaterThan, false),
+            ComparisonOperator.GreaterThanOrEqual => (SimdBaseOp.LessThan, true),
+            _ => (SimdBaseOp.Equals, false)
+        };
+    }
+
+    /// <summary>
+    /// Performs the pre-resolved SIMD comparison on Int32 vectors.
+    /// The 3-way branch on BaseOp is perfectly predicted since the value is loop-invariant.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public Vector256<int> Compare(Vector256<int> data, Vector256<int> compareValue)
+    {
+        var result = BaseOp switch
+        {
+            SimdBaseOp.Equals => Vector256.Equals(data, compareValue),
+            SimdBaseOp.LessThan => Vector256.LessThan(data, compareValue),
+            SimdBaseOp.GreaterThan => Vector256.GreaterThan(data, compareValue),
+            _ => Vector256<int>.Zero
+        };
+        return Negate ? ~result : result;
+    }
+
+    /// <summary>
+    /// Performs the pre-resolved SIMD comparison on Double vectors.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public Vector256<double> Compare(Vector256<double> data, Vector256<double> compareValue)
+    {
+        var result = BaseOp switch
+        {
+            SimdBaseOp.Equals => Vector256.Equals(data, compareValue),
+            SimdBaseOp.LessThan => Vector256.LessThan(data, compareValue),
+            SimdBaseOp.GreaterThan => Vector256.GreaterThan(data, compareValue),
+            _ => Vector256<double>.Zero
+        };
+        return Negate ? ~result : result;
+    }
+}
+
+/// <summary>
 /// Predicate for comparing an Int32 column against a constant value.
 /// Uses SIMD vectorization for bulk comparison when processing primitive Int32Arrays.
 /// </summary>
@@ -239,6 +310,10 @@ public sealed class Int32ComparisonPredicate : ColumnPredicate
             int i = 0;
             int vectorEnd = length - (length % 8);
             
+            // OPTIMIZATION: Hoist operator switch outside the SIMD loop.
+            // Decompose into base operation + negate flag, resolved once.
+            var cmp = new ComparisonDecomposition(Operator);
+            
             // Prefetch distance: 16 iterations ahead (128 Int32 = 512 bytes = 8 cache lines)
             // This keeps data in L1 cache by the time we process it
             const int prefetchDistance = 128;
@@ -258,17 +333,8 @@ public sealed class Int32ComparisonPredicate : ColumnPredicate
                 // Load 8 values
                 var data = Vector256.LoadUnsafe(ref Unsafe.Add(ref valuesRef, i));
                 
-                // Perform comparison based on operator
-                Vector256<int> mask = Operator switch
-                {
-                    ComparisonOperator.Equal => Vector256.Equals(data, compareValue),
-                    ComparisonOperator.NotEqual => ~Vector256.Equals(data, compareValue),
-                    ComparisonOperator.LessThan => Vector256.LessThan(data, compareValue),
-                    ComparisonOperator.LessThanOrEqual => Vector256.LessThanOrEqual(data, compareValue),
-                    ComparisonOperator.GreaterThan => Vector256.GreaterThan(data, compareValue),
-                    ComparisonOperator.GreaterThanOrEqual => Vector256.GreaterThanOrEqual(data, compareValue),
-                    _ => Vector256<int>.Zero
-                };
+                // Perform comparison using pre-resolved decomposition (no per-iteration switch)
+                var mask = cmp.Compare(data, compareValue);
 
                 // Apply mask to bitmap (nulls already filtered out)
                 ApplyMaskToBitmap(mask, ref selection, i);
@@ -489,6 +555,9 @@ public sealed class Int32ComparisonPredicate : ColumnPredicate
             var compareValue = Vector256.Create(Value);
             ref int valuesRef = ref Unsafe.AsRef(in values[0]);
             
+            // OPTIMIZATION: Hoist operator switch outside the SIMD loop.
+            var cmp = new ComparisonDecomposition(Operator);
+            
             // Align to 8-element boundary from startIndex
             int vectorStart = ((startIndex + 7) >> 3) << 3; // Round up to next 8
             int vectorEnd = (endIndex >> 3) << 3; // Round down to 8
@@ -513,16 +582,8 @@ public sealed class Int32ComparisonPredicate : ColumnPredicate
             {
                 var data = Vector256.LoadUnsafe(ref Unsafe.Add(ref valuesRef, i));
                 
-                Vector256<int> mask = Operator switch
-                {
-                    ComparisonOperator.Equal => Vector256.Equals(data, compareValue),
-                    ComparisonOperator.NotEqual => ~Vector256.Equals(data, compareValue),
-                    ComparisonOperator.LessThan => Vector256.LessThan(data, compareValue),
-                    ComparisonOperator.LessThanOrEqual => Vector256.LessThanOrEqual(data, compareValue),
-                    ComparisonOperator.GreaterThan => Vector256.GreaterThan(data, compareValue),
-                    ComparisonOperator.GreaterThanOrEqual => Vector256.GreaterThanOrEqual(data, compareValue),
-                    _ => Vector256<int>.Zero
-                };
+                // Perform comparison using pre-resolved decomposition (no per-iteration switch)
+                var mask = cmp.Compare(data, compareValue);
 
                 // For range evaluation, we still need per-element null checks
                 // since bulk filtering wasn't applied (parallel execution path)
@@ -630,6 +691,9 @@ public sealed class DoubleComparisonPredicate : ColumnPredicate
             int i = 0;
             int vectorEnd = length - (length % 4);
             
+            // OPTIMIZATION: Hoist operator switch outside the SIMD loop.
+            var cmp = new ComparisonDecomposition(Operator);
+            
             // Prefetch distance: 16 iterations ahead (64 Double = 512 bytes = 8 cache lines)
             const int prefetchDistance = 64;
 
@@ -647,17 +711,8 @@ public sealed class DoubleComparisonPredicate : ColumnPredicate
                 // Load 4 values
                 var data = Vector256.LoadUnsafe(ref Unsafe.Add(ref valuesRef, i));
                 
-                // Perform comparison based on operator
-                Vector256<double> mask = Operator switch
-                {
-                    ComparisonOperator.Equal => Vector256.Equals(data, compareValue),
-                    ComparisonOperator.NotEqual => ~Vector256.Equals(data, compareValue),
-                    ComparisonOperator.LessThan => Vector256.LessThan(data, compareValue),
-                    ComparisonOperator.LessThanOrEqual => Vector256.LessThanOrEqual(data, compareValue),
-                    ComparisonOperator.GreaterThan => Vector256.GreaterThan(data, compareValue),
-                    ComparisonOperator.GreaterThanOrEqual => Vector256.GreaterThanOrEqual(data, compareValue),
-                    _ => Vector256<double>.Zero
-                };
+                // Perform comparison using pre-resolved decomposition (no per-iteration switch)
+                var mask = cmp.Compare(data, compareValue);
 
                 // Apply mask to bitmap (nulls already filtered out)
                 ApplyDoubleMaskToBitmap(mask, ref selection, i);
@@ -863,6 +918,9 @@ public sealed class DoubleComparisonPredicate : ColumnPredicate
             var compareValue = Vector256.Create(Value);
             ref double valuesRef = ref Unsafe.AsRef(in values[0]);
             
+            // OPTIMIZATION: Hoist operator switch outside the SIMD loop.
+            var cmp = new ComparisonDecomposition(Operator);
+            
             // Align to 4-element boundary from startIndex
             int vectorStart = ((startIndex + 3) >> 2) << 2; // Round up to next 4
             int vectorEnd = (endIndex >> 2) << 2; // Round down to 4
@@ -887,16 +945,8 @@ public sealed class DoubleComparisonPredicate : ColumnPredicate
             {
                 var data = Vector256.LoadUnsafe(ref Unsafe.Add(ref valuesRef, i));
                 
-                Vector256<double> mask = Operator switch
-                {
-                    ComparisonOperator.Equal => Vector256.Equals(data, compareValue),
-                    ComparisonOperator.NotEqual => ~Vector256.Equals(data, compareValue),
-                    ComparisonOperator.LessThan => Vector256.LessThan(data, compareValue),
-                    ComparisonOperator.LessThanOrEqual => Vector256.LessThanOrEqual(data, compareValue),
-                    ComparisonOperator.GreaterThan => Vector256.GreaterThan(data, compareValue),
-                    ComparisonOperator.GreaterThanOrEqual => Vector256.GreaterThanOrEqual(data, compareValue),
-                    _ => Vector256<double>.Zero
-                };
+                // Perform comparison using pre-resolved decomposition (no per-iteration switch)
+                var mask = cmp.Compare(data, compareValue);
 
                 // For range evaluation, we still need per-element null checks
                 // since bulk filtering wasn't applied (parallel execution path)

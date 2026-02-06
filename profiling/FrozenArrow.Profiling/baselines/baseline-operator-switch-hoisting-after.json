@@ -1,0 +1,43 @@
+[
+  {
+    "ScenarioName": "Filter",
+    "Description": "Filter \u002B Count with varying selectivity",
+    "RowCount": 1000000,
+    "Iterations": 15,
+    "SamplesMicroseconds": [
+      34760.3,
+      44461.6,
+      40794.6,
+      35117.9,
+      42204.6,
+      33522.8,
+      33858.3,
+      45107.1,
+      34840.5,
+      37199.3,
+      37985.7,
+      33045.1,
+      35258.1,
+      30446.7,
+      34806.7
+    ],
+    "MinMicroseconds": 30446.7,
+    "MaxMicroseconds": 45107.1,
+    "MedianMicroseconds": 35117.9,
+    "AverageMicroseconds": 36893.95333333333,
+    "StdDevMicroseconds": 4353.528804457148,
+    "RowsPerSecond": 28475506.792832144,
+    "MillionRowsPerSecond": 28.475506792832142,
+    "PhaseDetails": null,
+    "AllocatedBytes": 37259,
+    "Metadata": {
+      "HighSelectivity": "Age \u003E 55 -\u003E 199452 rows",
+      "LowSelectivity": "IsActive -\u003E 699215 rows",
+      "MultiFilter": "Age \u003E 30 \u0026\u0026 IsActive \u0026\u0026 Salary \u003E 50000 -\u003E 466007 rows"
+    },
+    "Timestamp": "2026-02-06T01:58:13.4041877Z",
+    "OutliersRemoved": 0,
+    "IsStable": true,
+    "StabilityWarning": null
+  }
+]

@@ -1,0 +1,33 @@
+[
+  {
+    "ScenarioName": "Filter",
+    "Description": "Filter \u002B Count with varying selectivity",
+    "RowCount": 1000000,
+    "Iterations": 5,
+    "SamplesMicroseconds": [
+      57620.6,
+      42576.5,
+      50096.2,
+      40238.5,
+      40441.3
+    ],
+    "MinMicroseconds": 40238.5,
+    "MaxMicroseconds": 57620.6,
+    "MedianMicroseconds": 42576.5,
+    "AverageMicroseconds": 46194.619999999995,
+    "StdDevMicroseconds": 7540.593382950706,
+    "RowsPerSecond": 23487134.921846557,
+    "MillionRowsPerSecond": 23.487134921846557,
+    "PhaseDetails": null,
+    "AllocatedBytes": 36766,
+    "Metadata": {
+      "HighSelectivity": "Age \u003E 55 -\u003E 199452 rows",
+      "LowSelectivity": "IsActive -\u003E 699215 rows",
+      "MultiFilter": "Age \u003E 30 \u0026\u0026 IsActive \u0026\u0026 Salary \u003E 50000 -\u003E 466007 rows"
+    },
+    "Timestamp": "2026-02-06T01:54:24.390936Z",
+    "OutliersRemoved": 0,
+    "IsStable": false,
+    "StabilityWarning": "High variance detected (CV=16.3%, max/min=1.4x). Consider: more warmup, closing other apps, or using --gc-between-iterations."
+  }
+]
