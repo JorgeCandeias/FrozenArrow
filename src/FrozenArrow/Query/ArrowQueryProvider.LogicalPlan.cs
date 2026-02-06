@@ -19,7 +19,6 @@ public sealed partial class ArrowQueryProvider
         var schema = new Dictionary<string, Type>();
         foreach (var kvp in _columnIndexMap)
         {
-            // Get column type from record batch
             var columnIndex = kvp.Value;
             if (columnIndex >= 0 && columnIndex < _recordBatch.ColumnCount)
             {
@@ -28,7 +27,48 @@ public sealed partial class ArrowQueryProvider
             }
         }
 
-        // Step 2: Translate LINQ expression to logical plan
+        LogicalPlanNode optimizedPlan;
+
+        // Step 2: Check cache if enabled (Phase 7)
+        if (UseLogicalPlanCache)
+        {
+            var cacheKey = LogicalPlan.LogicalPlanCache.ComputeKey(expression.ToString());
+            
+            if (_logicalPlanCache.TryGet(cacheKey, out var cachedPlan))
+            {
+                // Cache hit!
+                optimizedPlan = cachedPlan;
+            }
+            else
+            {
+                // Cache miss - translate and optimize
+                optimizedPlan = TranslateAndOptimize(expression, schema);
+                _logicalPlanCache.Add(cacheKey, optimizedPlan);
+            }
+        }
+        else
+        {
+            // No caching
+            optimizedPlan = TranslateAndOptimize(expression, schema);
+        }
+
+        // Step 3: Execute
+        if (UsePhysicalPlanExecution)
+        {
+            return ExecuteLogicalPlanViaPhysical<TResult>(optimizedPlan);
+        }
+        else if (UseDirectLogicalPlanExecution)
+        {
+            return ExecuteLogicalPlanDirect<TResult>(optimizedPlan);
+        }
+        else
+        {
+            return ExecuteLogicalPlanViaBridge<TResult>(optimizedPlan, expression);
+        }
+    }
+
+    private LogicalPlanNode TranslateAndOptimize(Expression expression, Dictionary<string, Type> schema)
+    {
         var translator = new LinqToLogicalPlanTranslator(
             _source,
             _elementType,
@@ -38,26 +78,8 @@ public sealed partial class ArrowQueryProvider
 
         var logicalPlan = translator.Translate(expression);
 
-        // Step 3: Optimize the logical plan
         var optimizer = new LogicalPlanOptimizer(_zoneMap);
-        var optimizedPlan = optimizer.Optimize(logicalPlan);
-
-        // Step 4: Execute - choose between physical plans, direct execution, or bridge
-        if (UsePhysicalPlanExecution)
-        {
-            // Phase 6: Physical plan execution with cost-based strategies
-            return ExecuteLogicalPlanViaPhysical<TResult>(optimizedPlan);
-        }
-        else if (UseDirectLogicalPlanExecution)
-        {
-            // Phase 5: Direct execution without bridge
-            return ExecuteLogicalPlanDirect<TResult>(optimizedPlan);
-        }
-        else
-        {
-            // Phase 3-4: Bridge to existing execution (maintain compatibility)
-            return ExecuteLogicalPlanViaBridge<TResult>(optimizedPlan, expression);
-        }
+        return optimizer.Optimize(logicalPlan);
     }
 
     /// <summary>
