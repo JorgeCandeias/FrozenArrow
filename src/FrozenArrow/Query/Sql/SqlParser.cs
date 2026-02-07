@@ -122,9 +122,9 @@ public sealed class SqlParser
     private ColumnPredicate? ParseCondition(string condition)
     {
         // Parse: column operator value
-        // Examples: "Age > 30", "Name = 'Alice'", "Score <= 90.5"
+        // Examples: "Age > 30", "Name = 'Alice'", "Name LIKE 'A%'"
 
-        var match = Regex.Match(condition, @"(\w+)\s*(=|>|<|>=|<=|!=)\s*(.+)", RegexOptions.IgnoreCase);
+        var match = Regex.Match(condition, @"(\w+)\s*(=|>|<|>=|<=|!=|<>|LIKE)\s*(.+)", RegexOptions.IgnoreCase);
         if (!match.Success)
             return null;
 
@@ -138,6 +138,16 @@ public sealed class SqlParser
         if (!_schema.TryGetValue(columnName, out var columnType))
             throw new ArgumentException($"Column '{columnName}' not found in schema");
 
+        // Handle LIKE operator first (before ComparisonOperator switch)
+        if (operatorStr.Equals("LIKE", StringComparison.OrdinalIgnoreCase))
+        {
+            if (columnType == typeof(string))
+            {
+                return ParseLikeOperator(columnName, columnIndex, valueStr);
+            }
+            throw new NotSupportedException($"LIKE operator only supported for string columns");
+        }
+
         var op = operatorStr switch
         {
             "=" => ComparisonOperator.Equal,
@@ -146,6 +156,7 @@ public sealed class SqlParser
             ">=" => ComparisonOperator.GreaterThanOrEqual,
             "<=" => ComparisonOperator.LessThanOrEqual,
             "!=" => ComparisonOperator.NotEqual,
+            "<>" => ComparisonOperator.NotEqual,
             _ => throw new ArgumentException($"Unsupported operator: {operatorStr}")
         };
 
@@ -162,9 +173,21 @@ public sealed class SqlParser
         }
         else if (columnType == typeof(string))
         {
-            // For Phase 8, we only support int and double predicates
-            // String comparisons would need StringComparisonPredicate class
-            throw new NotSupportedException($"String predicates not yet supported in SQL queries");
+            // Phase 8 Enhancement: String predicate support
+            
+            // Handle standard comparison operators
+            var stringOp = op switch
+            {
+                ComparisonOperator.Equal => StringComparisonOperator.Equal,
+                ComparisonOperator.NotEqual => StringComparisonOperator.NotEqual,
+                ComparisonOperator.GreaterThan => StringComparisonOperator.GreaterThan,
+                ComparisonOperator.LessThan => StringComparisonOperator.LessThan,
+                ComparisonOperator.GreaterThanOrEqual => StringComparisonOperator.GreaterThanOrEqual,
+                ComparisonOperator.LessThanOrEqual => StringComparisonOperator.LessThanOrEqual,
+                _ => throw new NotSupportedException($"Operator {op} not supported for strings")
+            };
+            
+            return new StringComparisonPredicate(columnName, columnIndex, stringOp, valueStr);
         }
 
         throw new NotSupportedException($"Column type {columnType} not yet supported in SQL queries");
@@ -242,6 +265,49 @@ public sealed class SqlParser
         }
 
         return aggregations;
+    }
+
+    /// <summary>
+    /// Parses LIKE operator into appropriate string comparison.
+    /// Supports SQL wildcards: % (any characters), _ (single character).
+    /// Phase 8 Enhancement: LIKE operator support.
+    /// </summary>
+    private ColumnPredicate ParseLikeOperator(string columnName, int columnIndex, string pattern)
+    {
+        // Remove quotes if present
+        pattern = pattern.Trim('\'', '"');
+
+        // Analyze pattern to determine operation
+        bool startsWithPercent = pattern.StartsWith('%');
+        bool endsWithPercent = pattern.EndsWith('%');
+
+        if (startsWithPercent && endsWithPercent)
+        {
+            // %value% -> Contains
+            var value = pattern.Trim('%');
+            return new StringComparisonPredicate(columnName, columnIndex, 
+                StringComparisonOperator.Contains, value);
+        }
+        else if (startsWithPercent)
+        {
+            // %value -> EndsWith
+            var value = pattern.TrimStart('%');
+            return new StringComparisonPredicate(columnName, columnIndex,
+                StringComparisonOperator.EndsWith, value);
+        }
+        else if (endsWithPercent)
+        {
+            // value% -> StartsWith
+            var value = pattern.TrimEnd('%');
+            return new StringComparisonPredicate(columnName, columnIndex,
+                StringComparisonOperator.StartsWith, value);
+        }
+        else
+        {
+            // No wildcards -> Exact match
+            return new StringComparisonPredicate(columnName, columnIndex,
+                StringComparisonOperator.Equal, pattern);
+        }
     }
 
     private List<string> ParseColumns(string selectClause)
