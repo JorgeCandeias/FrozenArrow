@@ -6,47 +6,84 @@ namespace FrozenArrow.Query;
 /// Predicate that combines multiple predicates with OR logic.
 /// Phase 8 Enhancement (Part 2): Enables OR operator in SQL WHERE clauses.
 /// </summary>
-public sealed class OrPredicate : ColumnPredicate
+public sealed class OrPredicate(ColumnPredicate left, ColumnPredicate right) : ColumnPredicate
 {
-    private readonly ColumnPredicate _left;
-    private readonly ColumnPredicate _right;
+    private readonly ColumnPredicate _left = left ?? throw new ArgumentNullException(nameof(left));
+    private readonly ColumnPredicate _right = right ?? throw new ArgumentNullException(nameof(right));
 
     public override string ColumnName => $"({_left.ColumnName} OR {_right.ColumnName})";
     public override int ColumnIndex => _left.ColumnIndex; // Use first predicate's column
 
-    public OrPredicate(ColumnPredicate left, ColumnPredicate right)
-    {
-        _left = left ?? throw new ArgumentNullException(nameof(left));
-        _right = right ?? throw new ArgumentNullException(nameof(right));
-    }
-
     public override void Evaluate(RecordBatch batch, Span<bool> selection)
     {
         // Create temporary selection arrays for each predicate
-        var leftSelection = new bool[selection.Length];
-        var rightSelection = new bool[selection.Length];
+        // Start with all rows selected for each predicate to evaluate independently
+        var leftSelection = new bool[batch.Length];
+        var rightSelection = new bool[batch.Length];
         
-        // Copy original selection
-        selection.CopyTo(leftSelection);
-        selection.CopyTo(rightSelection);
+        // Initialize to the current selection state
+        for (int i = 0; i < batch.Length; i++)
+        {
+            leftSelection[i] = selection[i];
+            rightSelection[i] = selection[i];
+        }
 
-        // Evaluate both predicates
+        // Evaluate both predicates independently
         _left.Evaluate(batch, leftSelection.AsSpan());
         _right.Evaluate(batch, rightSelection.AsSpan());
 
-        // Combine with OR logic
-        for (int i = 0; i < selection.Length; i++)
+        // Combine with OR logic: keep row if it was selected by EITHER predicate
+        for (int i = 0; i < batch.Length; i++)
         {
-            selection[i] = selection[i] && (leftSelection[i] || rightSelection[i]);
+            // Only update if originally selected
+            if (selection[i])
+            {
+                selection[i] = leftSelection[i] || rightSelection[i];
+            }
+        }
+    }
+
+    public override void Evaluate(RecordBatch batch, ref SelectionBitmap selection, int? endIndex = null)
+    {
+        // For OR, we need to evaluate both predicates and combine results
+        var actualEndIndex = endIndex ?? batch.Length;
+        
+        // Create temporary bitmaps
+        using var leftSelection = SelectionBitmap.Create(actualEndIndex, initialValue: true);
+        using var rightSelection = SelectionBitmap.Create(actualEndIndex, initialValue: true);
+
+        // Copy current selection to both
+        for (int i = 0; i < actualEndIndex; i++)
+        {
+            if (!selection[i])
+            {
+                leftSelection.Clear(i);
+                rightSelection.Clear(i);
+            }
+        }
+
+        // Evaluate both predicates
+        _left.Evaluate(batch, ref System.Runtime.CompilerServices.Unsafe.AsRef(in leftSelection), actualEndIndex);
+        _right.Evaluate(batch, ref System.Runtime.CompilerServices.Unsafe.AsRef(in rightSelection), actualEndIndex);
+
+        // Combine with OR: selection[i] = leftSelection[i] OR rightSelection[i]
+        for (int i = 0; i < actualEndIndex; i++)
+        {
+            if (selection[i])
+            {
+                // Keep if either predicate selected it
+                if (!leftSelection[i] && !rightSelection[i])
+                {
+                    selection.Clear(i);
+                }
+            }
         }
     }
 
     protected override bool EvaluateSingle(IArrowArray column, int rowIndex)
     {
-        // For OR, return true if either predicate is true
-        // Note: Both predicates may operate on different columns
-        // This is a simplified version - full implementation would handle this properly
-        return true; // Placeholder - actual evaluation happens in Evaluate(RecordBatch, Span<bool>)
+        // This should not be called for compound predicates
+        throw new NotSupportedException("OrPredicate uses Evaluate(RecordBatch, ref SelectionBitmap) for evaluation");
     }
 
     public override string ToString()
@@ -59,17 +96,12 @@ public sealed class OrPredicate : ColumnPredicate
 /// Predicate that negates another predicate with NOT logic.
 /// Phase 8 Enhancement (Part 2): Enables NOT operator in SQL WHERE clauses.
 /// </summary>
-public sealed class NotPredicate : ColumnPredicate
+public sealed class NotPredicate(ColumnPredicate inner) : ColumnPredicate
 {
-    private readonly ColumnPredicate _inner;
+    private readonly ColumnPredicate _inner = inner ?? throw new ArgumentNullException(nameof(inner));
 
     public override string ColumnName => $"NOT {_inner.ColumnName}";
     public override int ColumnIndex => _inner.ColumnIndex;
-
-    public NotPredicate(ColumnPredicate inner)
-    {
-        _inner = inner ?? throw new ArgumentNullException(nameof(inner));
-    }
 
     public override void Evaluate(RecordBatch batch, Span<bool> selection)
     {

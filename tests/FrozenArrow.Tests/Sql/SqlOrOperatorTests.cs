@@ -34,6 +34,11 @@ public class SqlOrOperatorTests
 
         // Assert
         var list = result.ToList();
+        
+        // Debug: Check what we got
+        Console.WriteLine($"Result count: {list.Count}");
+        Console.WriteLine($"Values: {string.Join(", ", list.Select(x => x.Value))}");
+        
         Assert.Equal(2, list.Count);
         Assert.Contains(list, r => r.Value == 100);
         Assert.Contains(list, r => r.Value == 300);

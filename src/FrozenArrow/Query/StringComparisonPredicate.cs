@@ -1,5 +1,4 @@
 using Apache.Arrow;
-using Apache.Arrow.Types;
 
 namespace FrozenArrow.Query;
 
@@ -8,28 +7,19 @@ namespace FrozenArrow.Query;
 /// Phase 8 Enhancement: Enables SQL string predicates and LIKE operator.
 /// Supports equality, LIKE patterns (%, _), and case-insensitive comparisons.
 /// </summary>
-public sealed class StringComparisonPredicate : ColumnPredicate
+public sealed class StringComparisonPredicate(
+    string columnName,
+    int columnIndex,
+    StringComparisonOperator op,
+    string value,
+    bool ignoreCase = false) : ColumnPredicate
 {
-    public override string ColumnName { get; }
-    public override int ColumnIndex { get; }
-    public StringComparisonOperator Operator { get; }
-    public string Value { get; }
-    
-    private readonly StringComparison _comparisonType;
+    public override string ColumnName { get; } = columnName;
+    public override int ColumnIndex { get; } = columnIndex;
+    public StringComparisonOperator Operator { get; } = op;
+    public string Value { get; } = value ?? throw new ArgumentNullException(nameof(value));
 
-    public StringComparisonPredicate(
-        string columnName,
-        int columnIndex,
-        StringComparisonOperator op,
-        string value,
-        bool ignoreCase = false)
-    {
-        ColumnName = columnName;
-        ColumnIndex = columnIndex;
-        Operator = op;
-        Value = value ?? throw new ArgumentNullException(nameof(value));
-        _comparisonType = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-    }
+    private readonly StringComparison _comparisonType = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     public override void Evaluate(RecordBatch batch, Span<bool> selection)
     {
@@ -49,7 +39,7 @@ public sealed class StringComparisonPredicate : ColumnPredicate
 
             // Get string value
             var stringValue = GetStringValue(column, i);
-            
+
             if (stringValue == null)
             {
                 selection[i] = false;
@@ -74,7 +64,7 @@ public sealed class StringComparisonPredicate : ColumnPredicate
 
         // Get string value
         var stringValue = GetStringValue(column, rowIndex);
-        
+
         if (stringValue == null)
         {
             return false;
@@ -84,7 +74,7 @@ public sealed class StringComparisonPredicate : ColumnPredicate
         return EvaluateString(stringValue);
     }
 
-    private string? GetStringValue(IArrowArray column, int rowIndex)
+    private static string? GetStringValue(IArrowArray column, int rowIndex)
     {
         // Handle StringArray directly
         if (column is StringArray stringArray)
@@ -99,7 +89,7 @@ public sealed class StringComparisonPredicate : ColumnPredicate
             if (valueArray is StringArray dictStrings)
             {
                 var indices = dictArray.Indices;
-                
+
                 // Get the index - handle different index types
                 int index;
                 if (indices is Int8Array int8Indices)

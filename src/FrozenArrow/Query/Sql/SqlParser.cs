@@ -8,18 +8,10 @@ namespace FrozenArrow.Query.Sql;
 /// Phase 8: SQL support with full optimization pipeline.
 /// Supports: SELECT, WHERE, GROUP BY, LIMIT, OFFSET
 /// </summary>
-public sealed class SqlParser
+public sealed partial class SqlParser(Dictionary<string, Type> schema, Dictionary<string, int> columnIndexMap, long rowCount)
 {
-    private readonly Dictionary<string, Type> _schema;
-    private readonly Dictionary<string, int> _columnIndexMap;
-    private readonly long _rowCount;
-
-    public SqlParser(Dictionary<string, Type> schema, Dictionary<string, int> columnIndexMap, long rowCount)
-    {
-        _schema = schema ?? throw new ArgumentNullException(nameof(schema));
-        _columnIndexMap = columnIndexMap ?? throw new ArgumentNullException(nameof(columnIndexMap));
-        _rowCount = rowCount;
-    }
+    private readonly Dictionary<string, Type> _schema = schema ?? throw new ArgumentNullException(nameof(schema));
+    private readonly Dictionary<string, int> _columnIndexMap = columnIndexMap ?? throw new ArgumentNullException(nameof(columnIndexMap));
 
     /// <summary>
     /// Parses a SQL query and returns a logical plan.
@@ -32,11 +24,11 @@ public sealed class SqlParser
         sql = sql.Trim();
 
         // Parse query components
-        var selectMatch = Regex.Match(sql, @"SELECT\s+(.+?)\s+FROM", RegexOptions.IgnoreCase);
-        var whereMatch = Regex.Match(sql, @"WHERE\s+(.+?)(?:\s+GROUP BY|\s+ORDER BY|\s+LIMIT|\s+OFFSET|$)", RegexOptions.IgnoreCase);
-        var groupByMatch = Regex.Match(sql, @"GROUP BY\s+(\w+)", RegexOptions.IgnoreCase);
-        var limitMatch = Regex.Match(sql, @"LIMIT\s+(\d+)", RegexOptions.IgnoreCase);
-        var offsetMatch = Regex.Match(sql, @"OFFSET\s+(\d+)", RegexOptions.IgnoreCase);
+        var selectMatch = SelectRegex().Match(sql);
+        var whereMatch = WhereRegex().Match(sql);
+        var groupByMatch = GroupByRegex().Match(sql);
+        var limitMatch = LimitRegex().Match(sql);
+        var offsetMatch = OffsetRegex().Match(sql);
 
         if (!selectMatch.Success)
             throw new ArgumentException("SQL query must contain SELECT clause", nameof(sql));
@@ -44,7 +36,7 @@ public sealed class SqlParser
         // Build logical plan from bottom up: Scan ? Filter ? GroupBy/Aggregate ? Limit/Offset ? Project
 
         // 1. Start with scan
-        LogicalPlanNode plan = new ScanPlan("sql_source", new object(), _schema, _rowCount);
+        LogicalPlanNode plan = new ScanPlan("sql_source", new object(), _schema, rowCount);
 
         // 2. Add WHERE predicates if present
         if (whereMatch.Success)
@@ -64,7 +56,7 @@ public sealed class SqlParser
         {
             // GROUP BY with aggregations
             var groupByColumn = groupByMatch.Groups[1].Value;
-            var aggregations = ParseAggregations(selectClause, groupByColumn);
+            var aggregations = ParseAggregations(selectClause);
             
             var keyType = _schema.TryGetValue(groupByColumn, out var type) ? type : typeof(object);
             plan = new GroupByPlan(plan, groupByColumn, keyType, aggregations, groupByColumn);
@@ -156,12 +148,12 @@ public sealed class SqlParser
         if (trimmed.StartsWith("NOT ", StringComparison.OrdinalIgnoreCase))
         {
             // Parse the inner expression
-            var inner = trimmed.Substring(4).Trim();
-            
+            var inner = trimmed[4..].Trim();
+
             // Handle parentheses
-            if (inner.StartsWith("(") && inner.EndsWith(")"))
+            if (inner.StartsWith('(') && inner.EndsWith(')'))
             {
-                inner = inner.Substring(1, inner.Length - 2);
+                inner = inner[1..^1];
             }
 
             var innerPredicates = ParseWhereClause(inner);
@@ -184,9 +176,9 @@ public sealed class SqlParser
             var conditionTrimmed = condition.Trim();
             
             // Remove outer parentheses if present
-            if (conditionTrimmed.StartsWith("(") && conditionTrimmed.EndsWith(")"))
+            if (conditionTrimmed.StartsWith('(') && conditionTrimmed.EndsWith(')'))
             {
-                conditionTrimmed = conditionTrimmed.Substring(1, conditionTrimmed.Length - 2).Trim();
+                conditionTrimmed = conditionTrimmed[1..^1].Trim();
                 
                 // Recursively parse the inner expression
                 var innerPredicates = ParseWhereClause(conditionTrimmed);
@@ -208,7 +200,7 @@ public sealed class SqlParser
     /// <summary>
     /// Checks if an operator exists at the top level (outside parentheses).
     /// </summary>
-    private bool ContainsOperatorAtTopLevel(string expression, string op)
+    private static bool ContainsOperatorAtTopLevel(string expression, string op)
     {
         int parenDepth = 0;
         var upper = expression.ToUpper();
@@ -240,7 +232,7 @@ public sealed class SqlParser
     /// <summary>
     /// Splits an expression by a top-level operator (respecting parentheses).
     /// </summary>
-    private List<string> SplitByTopLevelOperator(string expression, string op)
+    private static List<string> SplitByTopLevelOperator(string expression, string op)
     {
         var result = new List<string>();
         var current = new System.Text.StringBuilder();
@@ -302,7 +294,7 @@ public sealed class SqlParser
         // Parse: column operator value
         // Examples: "Age > 30", "Name = 'Alice'", "Name LIKE 'A%'"
 
-        var match = Regex.Match(condition, @"(\w+)\s*(=|>|<|>=|<=|!=|<>|LIKE)\s*(.+)", RegexOptions.IgnoreCase);
+        var match = OperatorRegex().Match(condition);
         if (!match.Success)
             return null;
 
@@ -371,7 +363,7 @@ public sealed class SqlParser
         throw new NotSupportedException($"Column type {columnType} not yet supported in SQL queries");
     }
 
-    private bool IsAggregateQuery(string selectClause)
+    private static bool IsAggregateQuery(string selectClause)
     {
         var upper = selectClause.ToUpper();
         return upper.Contains("COUNT(") || upper.Contains("SUM(") || 
@@ -387,7 +379,7 @@ public sealed class SqlParser
             return (AggregationOperation.Count, null, typeof(int));
         }
 
-        var match = Regex.Match(selectClause, @"(COUNT|SUM|AVG|MIN|MAX)\((\w+)\)", RegexOptions.IgnoreCase);
+        var match = SimpleAggregationRegex().Match(selectClause);
         if (!match.Success)
             throw new ArgumentException($"Invalid aggregation: {selectClause}");
 
@@ -412,12 +404,12 @@ public sealed class SqlParser
         return (operation, columnName, outputType);
     }
 
-    private List<AggregationDescriptor> ParseAggregations(string selectClause, string groupByColumn)
+    private static List<AggregationDescriptor> ParseAggregations(string selectClause)
     {
         var aggregations = new List<AggregationDescriptor>();
 
         // Find all aggregation functions in SELECT clause
-        var matches = Regex.Matches(selectClause, @"(COUNT|SUM|AVG|MIN|MAX)\((\w+|\*)\)", RegexOptions.IgnoreCase);
+        var matches = AggregationRegex().Matches(selectClause);
 
         foreach (Match match in matches)
         {
@@ -450,7 +442,7 @@ public sealed class SqlParser
     /// Supports SQL wildcards: % (any characters), _ (single character).
     /// Phase 8 Enhancement: LIKE operator support.
     /// </summary>
-    private ColumnPredicate ParseLikeOperator(string columnName, int columnIndex, string pattern)
+    private static StringComparisonPredicate ParseLikeOperator(string columnName, int columnIndex, string pattern)
     {
         // Remove quotes if present
         pattern = pattern.Trim('\'', '"');
@@ -488,21 +480,33 @@ public sealed class SqlParser
         }
     }
 
-    private List<string> ParseColumns(string selectClause)
-    {
-        if (selectClause.Trim() == "*")
-        {
-            return _schema.Keys.ToList();
-        }
-
-        return selectClause.Split(',')
-            .Select(c => c.Trim())
-            .ToList();
-    }
-
-    private double EstimateSelectivity(List<ColumnPredicate> predicates)
+    private static double EstimateSelectivity(List<ColumnPredicate> predicates)
     {
         // Simple heuristic: assume each predicate filters 50%
         return Math.Pow(0.5, predicates.Count);
     }
+
+    [GeneratedRegex(@"SELECT\s+(.+?)\s+FROM", RegexOptions.IgnoreCase, "en-GB")]
+    private static partial Regex SelectRegex();
+
+    [GeneratedRegex(@"WHERE\s+(.+?)(?:\s+GROUP BY|\s+ORDER BY|\s+LIMIT|\s+OFFSET|$)", RegexOptions.IgnoreCase, "en-GB")]
+    private static partial Regex WhereRegex();
+
+    [GeneratedRegex(@"GROUP BY\s+(\w+)", RegexOptions.IgnoreCase, "en-GB")]
+    private static partial Regex GroupByRegex();
+
+    [GeneratedRegex(@"LIMIT\s+(\d+)", RegexOptions.IgnoreCase, "en-GB")]
+    private static partial Regex LimitRegex();
+
+    [GeneratedRegex(@"OFFSET\s+(\d+)", RegexOptions.IgnoreCase, "en-GB")]
+    private static partial Regex OffsetRegex();
+
+    [GeneratedRegex(@"(\w+)\s*(=|>|<|>=|<=|!=|<>|LIKE)\s*(.+)", RegexOptions.IgnoreCase, "en-GB")]
+    private static partial Regex OperatorRegex();
+
+    [GeneratedRegex(@"(COUNT|SUM|AVG|MIN|MAX)\((\w+)\)", RegexOptions.IgnoreCase, "en-GB")]
+    private static partial Regex SimpleAggregationRegex();
+
+    [GeneratedRegex(@"(COUNT|SUM|AVG|MIN|MAX)\((\w+|\*)\)", RegexOptions.IgnoreCase, "en-GB")]
+    private static partial Regex AggregationRegex();
 }
