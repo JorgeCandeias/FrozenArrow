@@ -41,6 +41,7 @@ internal sealed class LogicalPlanExecutor(
             OffsetPlan offset => ExecuteOffset<TResult>(offset),
             ProjectPlan project => ExecuteProject<TResult>(project),
             DistinctPlan distinct => ExecuteDistinct<TResult>(distinct),
+            SortPlan sort => ExecuteSort<TResult>(sort),
             _ => throw new NotSupportedException($"Logical plan node type '{plan.GetType().Name}' is not yet supported for direct execution")
         };
     }
@@ -417,6 +418,136 @@ internal sealed class LogicalPlanExecutor(
         }
 
         throw new InvalidOperationException("Sequence contains no elements.");
+    }
+
+    /// <summary>
+    /// Executes ORDER BY operation - sorts rows by specified columns.
+    /// Phase B: ORDER BY support.
+    /// </summary>
+    private TResult ExecuteSort<TResult>(SortPlan sort)
+    {
+        // Execute the input plan to get all rows
+        var inputResult = Execute<IEnumerable<object>>(sort.Input);
+        
+        // Convert to list for sorting
+        var items = inputResult.ToList();
+        
+        // Build a comparison function based on sort specifications
+        var comparer = new MultiColumnComparer(sort.SortSpecifications, _columnIndexMap, _recordBatch);
+        
+        // Sort the items
+        items.Sort(comparer);
+        
+        // Return based on result type
+        var resultType = typeof(TResult);
+        
+        if (resultType == typeof(int))
+        {
+            return (TResult)(object)items.Count;
+        }
+        
+        if (resultType == typeof(long))
+        {
+            return (TResult)(object)(long)items.Count;
+        }
+        
+        if (resultType.IsGenericType)
+        {
+            var genericType = resultType.GetGenericTypeDefinition();
+            if (genericType == typeof(IEnumerable<>) || genericType == typeof(IQueryable<>))
+            {
+                // Return the sorted list as IEnumerable<T>
+                return (TResult)(object)items;
+            }
+        }
+
+        // Single element result
+        if (items.Count > 0)
+        {
+            return (TResult)items[0];
+        }
+
+        throw new InvalidOperationException("Sequence contains no elements.");
+    }
+
+    /// <summary>
+    /// Comparer that sorts by multiple columns with different directions.
+    /// </summary>
+    private sealed class MultiColumnComparer : IComparer<object>
+    {
+        private readonly IReadOnlyList<SortSpecification> _sortSpecs;
+        private readonly Dictionary<string, int> _columnIndexMap;
+        private readonly RecordBatch _recordBatch;
+
+        public MultiColumnComparer(
+            IReadOnlyList<SortSpecification> sortSpecs,
+            Dictionary<string, int> columnIndexMap,
+            RecordBatch recordBatch)
+        {
+            _sortSpecs = sortSpecs;
+            _columnIndexMap = columnIndexMap;
+            _recordBatch = recordBatch;
+        }
+
+        public int Compare(object? x, object? y)
+        {
+            if (x == null && y == null) return 0;
+            if (x == null) return -1;
+            if (y == null) return 1;
+
+            // For each sort specification, compare the column values
+            foreach (var sortSpec in _sortSpecs)
+            {
+                var xValue = GetPropertyValue(x, sortSpec.ColumnName);
+                var yValue = GetPropertyValue(y, sortSpec.ColumnName);
+                
+                int comparison;
+                
+                if (xValue == null && yValue == null)
+                {
+                    comparison = 0;
+                }
+                else if (xValue == null)
+                {
+                    comparison = -1;
+                }
+                else if (yValue == null)
+                {
+                    comparison = 1;
+                }
+                else if (xValue is IComparable comparableX)
+                {
+                    comparison = comparableX.CompareTo(yValue);
+                }
+                else
+                {
+                    // Fallback to string comparison
+                    comparison = string.Compare(xValue?.ToString(), yValue?.ToString(), StringComparison.Ordinal);
+                }
+                
+                // If not equal, return based on sort direction
+                if (comparison != 0)
+                {
+                    return sortSpec.Direction == SortDirection.Ascending ? comparison : -comparison;
+                }
+                
+                // If equal, continue to next sort column
+            }
+            
+            return 0;
+        }
+
+        private static object? GetPropertyValue(object obj, string propertyName)
+        {
+            // Use reflection to get property value
+            var prop = obj.GetType().GetProperty(propertyName);
+            if (prop != null)
+            {
+                return prop.GetValue(obj);
+            }
+            
+            return null;
+        }
     }
 
     /// <summary>

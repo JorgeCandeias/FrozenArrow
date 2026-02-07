@@ -508,15 +508,49 @@ public sealed partial class SqlParser(Dictionary<string, Type> schema, Dictionar
 
     /// <summary>
     /// Parses ORDER BY clause and creates a sort plan.
-    /// Phase B: ORDER BY support - not yet implemented.
+    /// Phase B: ORDER BY support.
     /// </summary>
-    private LogicalPlanNode ParseOrderByClause(LogicalPlanNode input, string orderByClause)
+    private SortPlan ParseOrderByClause(LogicalPlanNode input, string orderByClause)
     {
-        // For Phase B, ORDER BY requires a SortPlan logical node which doesn't exist yet
-        // This would require significant work to implement
-        throw new NotSupportedException(
-            "ORDER BY is not yet fully implemented in SQL parser. " +
-            "Use LINQ .OrderBy() instead for now.");
+        // Parse: "column1 ASC, column2 DESC, column3"
+        var sortSpecs = new List<SortSpecification>();
+        
+        var columns = orderByClause.Split(',', StringSplitOptions.RemoveEmptyEntries);
+        
+        foreach (var col in columns)
+        {
+            var trimmed = col.Trim();
+            
+            // Check for ASC/DESC suffix
+            SortDirection direction = SortDirection.Ascending;
+            string columnName;
+            
+            if (trimmed.EndsWith(" DESC", StringComparison.OrdinalIgnoreCase))
+            {
+                direction = SortDirection.Descending;
+                columnName = trimmed[..^5].Trim();
+            }
+            else if (trimmed.EndsWith(" ASC", StringComparison.OrdinalIgnoreCase))
+            {
+                direction = SortDirection.Ascending;
+                columnName = trimmed[..^4].Trim();
+            }
+            else
+            {
+                // Default to ascending if no direction specified
+                columnName = trimmed;
+            }
+            
+            // Validate column exists
+            if (!_schema.ContainsKey(columnName))
+            {
+                throw new ArgumentException($"ORDER BY column '{columnName}' not found in schema");
+            }
+            
+            sortSpecs.Add(new SortSpecification(columnName, direction));
+        }
+        
+        return new SortPlan(input, sortSpecs);
     }
 
     [GeneratedRegex(@"SELECT\s+(.+?)\s+FROM", RegexOptions.IgnoreCase, "en-GB")]
