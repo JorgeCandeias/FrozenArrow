@@ -23,10 +23,12 @@ public sealed partial class SqlParser(Dictionary<string, Type> schema, Dictionar
 
         sql = sql.Trim();
 
+
         // Parse query components
         var selectMatch = SelectRegex().Match(sql);
         var whereMatch = WhereRegex().Match(sql);
         var groupByMatch = GroupByRegex().Match(sql);
+        var havingMatch = HavingRegex().Match(sql);
         var orderByMatch = OrderByRegex().Match(sql);
         var limitMatch = LimitRegex().Match(sql);
         var offsetMatch = OffsetRegex().Match(sql);
@@ -67,6 +69,18 @@ public sealed partial class SqlParser(Dictionary<string, Type> schema, Dictionar
 
             var keyType = _schema.TryGetValue(groupByColumn, out var type) ? type : typeof(object);
             plan = new GroupByPlan(plan, groupByColumn, keyType, aggregations, groupByColumn);
+            
+            // 3a. Add HAVING clause if present (Phase B Quick Win - HAVING)
+            // HAVING filters groups after aggregation
+            if (havingMatch.Success)
+            {
+                var havingClause = havingMatch.Groups[1].Value;
+                var havingPredicates = ParseHavingClause(havingClause, plan.OutputSchema);
+                if (havingPredicates.Count > 0)
+                {
+                    plan = new FilterPlan(plan, havingPredicates, 0.5); // Apply filter after GROUP BY
+                }
+            }
         }
         else if (IsAggregateQuery(selectClause))
         {
@@ -628,6 +642,33 @@ public sealed partial class SqlParser(Dictionary<string, Type> schema, Dictionar
         return projections;
     }
 
+    /// <summary>
+    /// Parses HAVING clause which filters groups after aggregation.
+    /// Phase B Quick Win: HAVING support (simplified implementation).
+    /// </summary>
+    private static List<ColumnPredicate> ParseHavingClause(string havingClause, IReadOnlyDictionary<string, Type> groupedSchema)
+    {
+        // HAVING operates on the grouped/aggregated columns
+        // Example: "HAVING COUNT > 10" where COUNT is the aggregation result column
+        
+        // Create a temporary parser with the grouped schema
+        var groupedColumnIndexMap = new Dictionary<string, int>();
+        int index = 0;
+        foreach (var kvp in groupedSchema)
+        {
+            groupedColumnIndexMap[kvp.Key] = index++;
+        }
+        
+        var havingParser = new SqlParser(
+            groupedSchema.ToDictionary(k => k.Key, v => v.Value),
+            groupedColumnIndexMap,
+            100); // Row count doesn't matter for parsing
+        
+        // Parse the HAVING condition as a WHERE clause on grouped columns
+        var predicates = havingParser.ParseWhereClause(havingClause);
+        return predicates;
+    }
+
     private static double EstimateSelectivity(List<ColumnPredicate> predicates)
     {
         // Simple heuristic: assume each predicate filters 50%
@@ -689,6 +730,9 @@ public sealed partial class SqlParser(Dictionary<string, Type> schema, Dictionar
 
     [GeneratedRegex(@"GROUP BY\s+(\w+)", RegexOptions.IgnoreCase, "en-GB")]
     private static partial Regex GroupByRegex();
+
+    [GeneratedRegex(@"HAVING\s+(.+?)(?:\s+ORDER BY|\s+LIMIT|\s+OFFSET|$)", RegexOptions.IgnoreCase, "en-GB")]
+    private static partial Regex HavingRegex();
 
     [GeneratedRegex(@"ORDER BY\s+(.+?)(?:\s+LIMIT|\s+OFFSET|$)", RegexOptions.IgnoreCase, "en-GB")]
     private static partial Regex OrderByRegex();
