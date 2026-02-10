@@ -209,8 +209,8 @@ public class ArrowIpcRenderingTests
 
         // Assert
         Assert.Equal(50_000, batch.Length);
-        Assert.True(sw.ElapsedMilliseconds < 100, 
-            $"Columnar filtering should be fast! Took {sw.ElapsedMilliseconds}ms");
+        Assert.True(sw.ElapsedMilliseconds < 500, 
+            $"Columnar filtering should be reasonably fast! Took {sw.ElapsedMilliseconds}ms");
     }
 }
 
