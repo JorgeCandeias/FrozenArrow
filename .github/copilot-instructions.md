@@ -14,9 +14,10 @@ The project focuses on:
 
 ## Core Development Principles
 
-### Immutability First: Thread-Safety by Design ⚡
+### Immutability First: Thread-Safety by Design
 
-**CRITICAL PRINCIPLE**: FrozenArrow is a **frozen/immutable collection**. After creation, data structures must not be altered in any way.
+FrozenArrow is a frozen/immutable collection.
+After creation, data structures must not be altered in any way.
 
 **Design Philosophy:**
 - ✅ **Immutable = Correct** - Immutable objects are inherently thread-safe
@@ -87,7 +88,7 @@ The project focuses on:
 
 **When Mutation Is Unavoidable:**
 - Use `Interlocked` operations for counters/timestamps (e.g., LRU tracking)
-- Document why mutation is necessary and thread-safety guarantees
+- Comment why mutation is necessary and thread-safety guarantees
 - Consider if the mutable state can be moved to a separate coordination class
 
 **Verification:**
@@ -129,26 +130,26 @@ As a frontier AI model, your ability to make novel connections and challenge ass
 
 **When proposing optimizations, explore unconventional ideas:**
 
-? **Reverse the problem:**
+1. **Reverse the problem:**
 - Instead of "how to filter faster," ask "can we avoid filtering?"
 - Instead of "optimize this loop," ask "can we eliminate the loop?"
 - Instead of "speed up allocation," ask "can we avoid allocating?"
 
-? **Borrow from other domains:**
+2. **Borrow from other domains:**
 - Graphics programming (texture compression, Z-buffer tricks)
 - Database systems (learned indices, adaptive radix trees)
 - Compiler optimization (loop fusion, strength reduction)
 - Machine learning (learned query optimization)
 - Hardware design (prefetching, speculation)
 
-? **Challenge fundamental assumptions:**
+3. **Challenge fundamental assumptions:**
 - "Why do we build the bitmap at all?"
 - "Does this need to be sequential?"
 - "What if we delayed this computation until actually needed?"
 - "Could we use a completely different data structure?"
 - "What if we processed data in a different order?"
 
-? **Propose high-risk, high-reward ideas:**
+4. **Propose high-risk, high-reward ideas:**
 - Novel algorithms from recent research papers
 - Experimental CPU features (AVX-512, ARM SVE, APX)
 - Unconventional memory layouts (cache-aware, NUMA-aware)
@@ -176,16 +177,16 @@ If you have a radical idea that might:
 ### Balancing Structure with Innovation
 
 **Use these guidelines as:**
-- ? **Safety rails** - Don't break things unknowingly
-- ? **Quality gates** - Verify improvements objectively  
-- ? **Context** - What's been tried, what worked
-- ? **Shared language** - Communicate ideas clearly
+- **Safety rails** - Don't break things unknowingly
+- **Quality gates** - Verify improvements objectively  
+- **Context** - What's been tried, what worked
+- **Shared language** - Communicate ideas clearly
 
 **Don't let them become:**
-- ? **Creativity limiters** - "We must do it this way"
-- ? **The only path** - Other approaches exist
-- ? **Barriers to experimentation** - Try bold ideas
-- ? **Excuse for incrementalism** - Think bigger
+- **Creativity limiters** - "We must do it this way"
+- **The only path** - Other approaches exist
+- **Barriers to experimentation** - Try bold ideas
+- **Excuse for incrementalism** - Think bigger
 
 ### Examples of Creative vs. Conventional Thinking
 
@@ -281,13 +282,13 @@ dotnet run -c Release -- -s all -r 1000000 --save baseline-{optimization-name}.j
 
 ```bash
 cd profiling/FrozenArrow.Profiling
-dotnet run -c Release -- -s all -r 1000000 -c baseline-{optimization-name}.json
+dotnet run -c Release -- -s all -r 1000000 -c benchmark-{optimization-name}.json
 ```
 
 **This will show:**
-- ? **Improvements** (green): Scenarios that got faster
-- ?? **Regressions** (red): Scenarios that got slower
-- ?? **Neutral** (gray): Scenarios with <5% change
+- **Improvements** (green): Scenarios that got faster
+- **Regressions** (red): Scenarios that got slower
+- **Neutral** (gray): Scenarios with <5% change
 
 ### 4. Drill Down (If Needed)
 
@@ -307,34 +308,22 @@ Include performance numbers in:
 - **Technical docs**: Expected improvements and when they apply
 - **Summary document**: High-level overview
 
-### Required Scenarios by Optimization Type
-
-| Optimization Type | Required Scenarios to Test |
-|-------------------|----------------------------|
-| Predicate/Filter optimization | `filter`, `predicate`, `bitmap` |
-| Aggregation optimization | `aggregate`, `fused`, `sparseagg` |
-| Sparse/Block iteration optimization | `sparseagg`, `aggregate`, `bitmap` |
-| GroupBy optimization | `groupby` |
-| Parallelization changes | `parallel`, `all` |
-| General/Unknown impact | `all` |
-
 ### Acceptance Criteria
 
-? **Target scenario shows improvement** (>5% speedup)  
-? **No unrelated scenarios regress** (>5% slowdown) without justification  
-? **Memory allocation doesn't increase significantly** (>20%) without reason  
-? **Improvement is documented** with before/after numbers  
-? **Baseline saved** for future comparisons  
-? **Profiling README updated** if new scenario added or significant results changed
-
+- **Target scenario shows improvement** (>5% speedup)  
+- **No unrelated scenarios regress** (>5% slowdown) without justification  
+- **Memory allocation doesn't increase significantly** (>20%) without reason  
+- **Improvement is documented** with before/after numbers  
+- **Baseline saved** for future comparisons
+- **Profiling README.md updated** if new scenario added or significant results changed
 
 ### Red Flags ??
 
 **Stop and investigate if:**
-- ? Target scenario shows <5% improvement (optimization may not be working)
-- ? Multiple unrelated scenarios regress >10%
-- ? Memory allocation increases >50% without clear justification
-- ? Any scenario becomes >2x slower
+- Target scenario shows <5% improvement (optimization may not be working)
+- Multiple unrelated scenarios regress >10%
+- Memory allocation increases >50% without clear justification
+- Any scenario becomes >2x slower
 
 ### Dealing with Unstable Results ??
 
@@ -511,55 +500,6 @@ docs/patterns/{pattern-name}-pattern.md                  # Pattern (IF REUSABLE)
 - **Prefer .NET 10 features** for performance code (main library)
 - Use modern C# (C# 14.0): `ref struct`, `Span<T>`, pattern matching
 
-### Performance Patterns
-
-#### Hot Path Optimization
-```csharp
-// Mark critical paths for inlining
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-public void HotPath() { }
-
-// Use ref for zero-copy
-public void ProcessData(ref SelectionBitmap bitmap) { }
-
-// Stackalloc for small temporary buffers
-Span<int> buffer = stackalloc int[64];
-```
-
-#### Memory Management
-```csharp
-// Use ArrayPool for temporary buffers
-var buffer = ArrayPool<int>.Shared.Rent(size);
-try 
-{
-    // Use buffer
-}
-finally 
-{
-    ArrayPool<int>.Shared.Return(buffer);
-}
-
-// Or use 'using' with custom struct
-using var bitmap = SelectionBitmap.Create(count);
-```
-
-#### SIMD Operations
-```csharp
-// Check hardware capabilities
-if (Vector256.IsHardwareAccelerated)
-{
-    // Use AVX2 path
-}
-else if (Vector128.IsHardwareAccelerated)
-{
-    // Use SSE path
-}
-else
-{
-    // Scalar fallback
-}
-```
-
 ### Code Style
 - **Comments**: Explain WHY, especially for performance tricks
 - **Complexity**: Document O(n) for non-trivial algorithms
@@ -578,7 +518,7 @@ else
 - Cover race conditions if mutable state is involved
 
 ### Benchmarks (BenchmarkDotNet)
-- Compare against `List<T>` LINQ as baseline
+- Compare against `List<T>` LINQ
 - Test multiple dataset sizes (10K, 100K, 1M)
 - Use `[MemoryDiagnoser]` to track allocations
 - Located in: `benchmarks/FrozenArrow.Benchmarks/`
@@ -601,18 +541,18 @@ else
 ### When Proposing Optimizations
 
 **Do:**
-- ? Show understanding of current implementation
-- ? Explain optimization technique clearly
-- ? Rank options by impact/effort
-- ? Provide expected performance improvements
-- ? Consider edge cases and degradation
+- Show understanding of current implementation
+- Explain optimization technique clearly
+- Rank options by impact/effort
+- Provide expected performance improvements
+- Consider edge cases and degradation
 
 **Don't:**
-- ? Propose without understanding existing code
-- ? Implement without baseline capture
-- ? Add complexity without measurable benefit
-- ? Break APIs without strong justification
-- ? Optimize without profiling/benchmarking
+- Propose without understanding existing code
+- Implement without baseline capture
+- Add complexity without measurable benefit
+- Break APIs without strong justification
+- Optimize without profiling/benchmarking
 
 ### Documentation Format
 
@@ -677,11 +617,6 @@ Study these for optimization ideas:
 - **Microsoft SQL Server** - Columnstore indexes
 - **Polars** - DataFrame library (Rust/Python)
 
-### Key Papers
-- "MonetDB/X100: Hyper-Pipelining Query Execution" (vectorized execution)
-- "Column-Stores vs. Row-Stores: How Different Are They Really?" (columnar benefits)
-- "Efficiently Compiling Efficient Query Plans for Modern Hardware" (query compilation)
-
 ---
 
 ## Quick Reference
@@ -735,13 +670,3 @@ docs/
 
 ---
 
-## Summary
-
-This guide ensures:
-- ? **Consistent process** for all optimization work
-- ? **Objective verification** via profiling tool
-- ? **Complete documentation** for maintainability
-- ? **High code quality** with performance focus
-- ? **Zero regressions** through mandatory baseline comparison
-
-**Remember**: Every optimization must be measured. Intuition fails more often than it succeeds. Let the profiling tool guide the way! ??
