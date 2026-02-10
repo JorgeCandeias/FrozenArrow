@@ -59,7 +59,7 @@ internal sealed partial class LogicalPlanExecutor
         {
             PlanType = "Logical",
             UsedZoneMaps = zoneMap != null,
-            UsedSimd = true, // Assume SIMD is available
+            UsedSimd = false, // TODO: Track actual SIMD usage during execution
             UsedParallelExecution = parallelOptions?.EnableParallelExecution ?? false,
             RowsProcessed = count,
             PredicateCount = CountPredicates(plan)
@@ -70,7 +70,8 @@ internal sealed partial class LogicalPlanExecutor
         {
             case ScanPlan:
                 // Full scan - all rows selected
-                var allIndices = Enumerable.Range(0, count).ToList();
+                // Use SequentialIndexList to avoid O(n) allocation
+                var allIndices = new SequentialIndexList(0, count);
                 metadata = metadata with { RowsSelected = count };
                 return (allIndices, ExtractProjectedColumns(plan), metadata);
 
@@ -92,7 +93,8 @@ internal sealed partial class LogicalPlanExecutor
                 // For complex plans (GroupBy, Aggregate, Sort, etc.), fall back to full execution
                 // These don't fit the simple "selection + projection" model
                 // Future: Could return partial results for some of these
-                var fullIndices = Enumerable.Range(0, count).ToList();
+                var fullIndices = new SequentialIndexList(0, count);
+                metadata = metadata with { RowsSelected = count };
                 return (fullIndices, null, metadata);
         }
     }

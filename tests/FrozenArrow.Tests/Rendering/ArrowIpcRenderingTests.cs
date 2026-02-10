@@ -112,8 +112,25 @@ public class ArrowIpcRenderingTests
         return array switch
         {
             StringArray stringArray => stringArray.GetString(index),
-            DictionaryArray dictArray => GetStringValue(dictArray.Dictionary, ((Int32Array)dictArray.Indices).GetValue(index)!.Value),
+            DictionaryArray dictArray => GetStringValue(dictArray.Dictionary, GetDictionaryIndex(dictArray.Indices, index)),
             _ => throw new NotSupportedException($"Unsupported array type for string access: {array.GetType().Name}")
+        };
+    }
+
+    // Helper to extract dictionary index from various Arrow integer array types
+    private static int GetDictionaryIndex(IArrowArray indices, int rowIndex)
+    {
+        return indices switch
+        {
+            Int8Array int8 => int8.GetValue(rowIndex)!.Value,
+            UInt8Array uint8 => uint8.GetValue(rowIndex)!.Value,
+            Int16Array int16 => int16.GetValue(rowIndex)!.Value,
+            UInt16Array uint16 => (int)uint16.GetValue(rowIndex)!.Value,
+            Int32Array int32 => int32.GetValue(rowIndex)!.Value,
+            UInt32Array uint32 => checked((int)uint32.GetValue(rowIndex)!.Value),
+            Int64Array int64 => checked((int)int64.GetValue(rowIndex)!.Value),
+            UInt64Array uint64 => checked((int)uint64.GetValue(rowIndex)!.Value),
+            _ => throw new NotSupportedException($"Unsupported dictionary index array type: {indices.GetType().Name}")
         };
     }
 

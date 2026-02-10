@@ -47,7 +47,11 @@ public sealed record QueryExecutionMetadata
     /// <summary>
     /// Additional custom properties for extensibility.
     /// </summary>
-    public Dictionary<string, object>? Properties { get; init; }
+    /// <remarks>
+    /// Exposed as IReadOnlyDictionary to prevent mutation after construction.
+    /// Use 'with' syntax to create modified copies if needed.
+    /// </remarks>
+    public IReadOnlyDictionary<string, object>? Properties { get; init; }
 
     /// <summary>
     /// Returns a string representation of the metadata.

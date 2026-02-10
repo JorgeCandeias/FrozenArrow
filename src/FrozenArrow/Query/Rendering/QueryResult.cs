@@ -23,7 +23,7 @@ namespace FrozenArrow.Query.Rendering;
 /// Creates a new QueryResult.
 /// </remarks>
 /// <param name="recordBatch">The underlying Arrow RecordBatch containing columnar data.</param>
-/// <param name="selectedIndices">The indices of selected rows (empty = all rows selected).</param>
+/// <param name="selectedIndices">The indices of selected rows. For full scans, this contains [0..N-1].</param>
 /// <param name="projectedColumns">The columns that are actually needed (null = all columns).</param>
 /// <param name="metadata">Optional metadata about query execution.</param>
 public readonly struct QueryResult(
@@ -38,10 +38,10 @@ public readonly struct QueryResult(
     public RecordBatch RecordBatch { get; } = recordBatch ?? throw new ArgumentNullException(nameof(recordBatch));
 
     /// <summary>
-    /// The indices of selected rows (empty = all rows selected).
+    /// The indices of selected rows.
     /// </summary>
     /// <remarks>
-    /// For queries with no filters, this will contain all indices [0..N-1].
+    /// For queries with no filters (full scan), this contains all indices [0..N-1].
     /// For filtered queries, this contains only the rows that passed predicates.
     /// </remarks>
     public IReadOnlyList<int> SelectedIndices { get; } = selectedIndices ?? throw new ArgumentNullException(nameof(selectedIndices));
