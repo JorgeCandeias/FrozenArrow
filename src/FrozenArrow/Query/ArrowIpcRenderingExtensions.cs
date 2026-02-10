@@ -34,7 +34,7 @@ public static class ArrowIpcRenderingExtensions
     /// Use cases:
     /// - Export to Arrow IPC files (.arrow, .feather)
     /// - Service-to-service data exchange (Arrow Flight)
-    /// - Data lake exports (Arrow ? Parquet conversion)
+    /// - Data lake exports (Arrow to Parquet conversion)
     /// - Analytics integration (Spark, DuckDB, Polars)
     /// </para>
     /// 

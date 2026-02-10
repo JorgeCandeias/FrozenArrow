@@ -427,16 +427,22 @@ public sealed class ArrowIpcRenderer : IResultRenderer<RecordBatch>
                 builder.AppendNull();
             else
             {
-                // TimestampArray stores ticks as long (not DateTimeOffset)
-                var ticksValue = source.GetValue(index)!.Value;
+                // TimestampArray stores timestamp values as a long count of units since Unix epoch,
+                // where the unit is defined by timestampType.Unit (Second, Millisecond, Microsecond, Nanosecond).
+                var unitValue = source.GetValue(index)!.Value;
                 
-                // Convert based on unit
+                // Convert based on unit without truncating sub-millisecond precision.
+                // For microseconds/nanoseconds we convert directly to .NET ticks relative to UnixEpoch.
                 var dateTimeOffset = timestampType.Unit switch
                 {
-                    Apache.Arrow.Types.TimeUnit.Second => DateTimeOffset.FromUnixTimeSeconds(ticksValue),
-                    Apache.Arrow.Types.TimeUnit.Millisecond => DateTimeOffset.FromUnixTimeMilliseconds(ticksValue),
-                    Apache.Arrow.Types.TimeUnit.Microsecond => DateTimeOffset.FromUnixTimeMilliseconds(ticksValue / 1000),
-                    Apache.Arrow.Types.TimeUnit.Nanosecond => DateTimeOffset.FromUnixTimeMilliseconds(ticksValue / 1_000_000),
+                    Apache.Arrow.Types.TimeUnit.Second =>
+                        DateTimeOffset.FromUnixTimeSeconds(unitValue),
+                    Apache.Arrow.Types.TimeUnit.Millisecond =>
+                        DateTimeOffset.FromUnixTimeMilliseconds(unitValue),
+                    Apache.Arrow.Types.TimeUnit.Microsecond =>
+                        DateTimeOffset.UnixEpoch + TimeSpan.FromTicks(unitValue * 10),          // 1 microsecond = 10 ticks
+                    Apache.Arrow.Types.TimeUnit.Nanosecond =>
+                        DateTimeOffset.UnixEpoch + TimeSpan.FromTicks(unitValue / 100),        // 1 tick = 100 nanoseconds
                     _ => throw new NotSupportedException($"Unsupported timestamp unit: {timestampType.Unit}")
                 };
                 
