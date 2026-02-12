@@ -142,6 +142,59 @@ public sealed partial class ArrowQueryProvider
     }
 
     /// <summary>
+    /// Executes a query expression to produce a QueryResult (Phase 2: Arrow IPC rendering).
+    /// This is used by renderers that need the logical result before materialization.
+    /// </summary>
+    internal Rendering.QueryResult ExecuteToQueryResult(Expression expression)
+    {
+        // Step 1: Build schema for translator
+        var schema = new Dictionary<string, Type>();
+        foreach (var kvp in _columnIndexMap)
+        {
+            var columnIndex = kvp.Value;
+            if (columnIndex >= 0 && columnIndex < _recordBatch.ColumnCount)
+            {
+                var column = _recordBatch.Column(columnIndex);
+                schema[kvp.Key] = GetClrTypeFromArrowType(column.Data.DataType);
+            }
+        }
+
+        // Step 2: Translate and optimize
+        LogicalPlanNode optimizedPlan;
+        
+        if (UseLogicalPlanCache)
+        {
+            var cacheKey = LogicalPlan.LogicalPlanCache.ComputeKey(expression.ToString());
+            
+            if (_logicalPlanCache.TryGet(cacheKey, out var cachedPlan))
+            {
+                optimizedPlan = cachedPlan;
+            }
+            else
+            {
+                optimizedPlan = TranslateAndOptimize(expression, schema);
+                _logicalPlanCache.Add(cacheKey, optimizedPlan);
+            }
+        }
+        else
+        {
+            optimizedPlan = TranslateAndOptimize(expression, schema);
+        }
+
+        // Step 3: Execute to QueryResult
+        var executor = new LogicalPlanExecutor(
+            _recordBatch,
+            _count,
+            _columnIndexMap,
+            _createItem,
+            _zoneMap,
+            ParallelOptions,
+            UseCompiledQueries);
+
+        return executor.ExecuteToQueryResult(optimizedPlan);
+    }
+
+    /// <summary>
     /// Executes an optimized logical plan by bridging to the existing execution infrastructure (Phase 3-4).
     /// This maintains compatibility while using the new plan representation.
     /// </summary>
@@ -157,7 +210,7 @@ public sealed partial class ArrowQueryProvider
     /// Converts a logical plan to the existing QueryPlan format.
     /// This is a bridge to maintain compatibility during the migration.
     /// </summary>
-    private QueryPlan ConvertLogicalPlanToQueryPlan(LogicalPlanNode plan)
+    private static QueryPlan ConvertLogicalPlanToQueryPlan(LogicalPlanNode plan)
     {
         var predicates = new List<ColumnPredicate>();
         double selectivity = 1.0;

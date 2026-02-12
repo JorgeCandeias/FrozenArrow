@@ -8,7 +8,7 @@ namespace FrozenArrow.Query.LogicalPlan;
 /// Phase 5: Direct execution without bridge.
 /// Phase 9: Integrated compiled query execution.
 /// </summary>
-internal sealed class LogicalPlanExecutor(
+internal sealed partial class LogicalPlanExecutor(
     RecordBatch recordBatch,
     int count,
     Dictionary<string, int> columnIndexMap,
